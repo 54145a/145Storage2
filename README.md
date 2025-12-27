@@ -1,8 +1,14 @@
 ## 145 Storage 2
 My localstorage is a Javascript object :)
 
-This project is still in development and should't be used in production.
+```js
+import { StorageHelper } from "./node_modules/145-storage-2/storage.js";
+const storage = new StorageHelper();
+const settings = storage.getLocalStorage("settings");
+settings.foo = "Hello, 145 Storage!";
+```
 
+This project is still in development and should't be used in production.
 ### Roadmap
 [x] Remake 145 Storage
 [x] LocalStorage
