@@ -10,8 +10,8 @@ settings.foo = "Hello, 145 Storage!";
 
 This project is still in development and should't be used in production.
 ### Roadmap
-[x] Remake 145 Storage
-[x] LocalStorage
-[ ] Indexed DB
-[ ] SQL
-[ ] Release
+- [x] Remake 145 Storage
+- [x] LocalStorage
+- [ ] Indexed DB
+- [ ] SQL
+- [ ] Release
