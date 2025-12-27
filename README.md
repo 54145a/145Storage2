@@ -1,5 +1,5 @@
 ## 145 Storage 2
-My localstorage is a Javascript object :)
+My localStorage is a Javascript object :)
 
 ```js
 import { StorageHelper } from "./node_modules/145-storage-2/storage.js";
