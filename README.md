@@ -1,10 +1,19 @@
 ## 145 Storage 2
 My localStorage is a Javascript object :)
 
+```html
+<script type="importmap">
+    {
+        "imports": {
+            "145-storage-2/": "./node_modules/145-storage-2/"
+        }
+    }
+</script>
+```
 ```js
 import { StorageHelper } from "./node_modules/145-storage-2/storage.js";
 const storage = new StorageHelper();
-const settings = storage.getLocalStorage("settings");
+const settings = storage.getStorage("settings",);
 settings.foo = "Hello, 145 Storage!";
 ```
 
