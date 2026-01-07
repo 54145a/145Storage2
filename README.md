@@ -1,4 +1,5 @@
 ## 145 Storage 2
+
 My localStorage is a **Javascript  Object** :)
 
 > A lightweight, intelligent storage library for JavaScript that makes state persistence as easy as modifying an object.
