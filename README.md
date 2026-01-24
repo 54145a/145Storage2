@@ -13,15 +13,6 @@ My localStorage is a **Javascript  Object** :)
 
 ### 🚀 Usage
 
-```html
-<script type="importmap">
-    {
-        "imports": {
-            "145-storage-2/": "./node_modules/145-storage-2/"
-        }
-    }
-</script>
-```
 ```js
 import { StorageHelper } from "@54145a/storage2/storage.js";
 const storage = new StorageHelper();
