@@ -23,7 +23,7 @@ My localStorage is a **Javascript  Object** :)
 </script>
 ```
 ```js
-import { StorageHelper } from "145-storage-2/storage.js";
+import { StorageHelper } from "@54145a/storage2/storage.js";
 const storage = new StorageHelper();
 const settings = await storage.getStorage("settings", StorageHelper.ADAPTORS.LOCAL_STORAGE);
 settings.count = settings.count ? settings.count + 1 : 1;
