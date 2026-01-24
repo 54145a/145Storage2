@@ -1,7 +1,7 @@
 {
-  "name": "145-storage-2",
+  "name": "@54145a/storage2",
   "version": "0.1.0",
-  "description": "My localstorage is a Javascript object.",
+  "description": "My localStorage is a Javascript object.",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -9,7 +9,7 @@
     "type": "git",
     "url": "https://github.com/54145a/145Storage2.git"
   },
-  "keywords": [],
+  "keywords": ["localstorage"],
   "author": "54145a",
   "license": "AGPL-3.0-only"
 }
