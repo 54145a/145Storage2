@@ -1,19 +1,29 @@
-class StorageAdapter {
+class StorageAdaptor {
     /**
-     * @typedef {(name: String, data: Object)=>void} StorageUpdator
+     * @typedef {(name: String, data: Object)=>void} StorageUpdater
      * @param {(name: String)=>Promise<Object>|Object} defaultValueGetter 
-     * @param {StorageUpdator} updator 
+     * @param {StorageUpdater} updater 
      */
-    constructor(defaultValueGetter, updator) {
+    constructor(defaultValueGetter, updater) {
         this.defaultValueGetter = defaultValueGetter;
-        this.updator = updator;
+        this.updater = updater;
     }
 };
 class StorageHelper {
     constructor(updateDelayMs = 100) {
         this.updateDelayMs = updateDelayMs;
+        if (typeof addEventListener !== "undefined") {
+            addEventListener("beforeunload", async event => {
+                event.preventDefault();
+                for (const func of this.#registerdStorageUpdateFunctionList.map(ref => ref.deref())) {
+                    if (!func) return;
+                    await func();
+                }
+            });
+        }
     }
     #deepProxyCache = new WeakMap();
+    /** @type { WeakRef<Function>[] } */#registerdStorageUpdateFunctionList = [];
     /**
      * @param {Object} target
      * @param {ProxyHandler<Object>} handler
@@ -40,26 +50,29 @@ class StorageHelper {
     }
     /**
      * @param {String} name 
-     * @param {StorageAdapter} adaptor 
+     * @param {StorageAdaptor} adaptor 
      * @returns {Promise<any>}
      */
     async getStorage(name, adaptor) {
         let scheduledUpdate = false;
         const cache = {};
         Object.assign(cache, await adaptor.defaultValueGetter(name));
+        const updateCurrentStorage = async () => await adaptor.updater(name, cache);
+        /** @type {Number} */let updateTimeoutID;
         const requestUpdate = () => {
             if (!scheduledUpdate) {
                 scheduledUpdate = true;
-                setTimeout(async () => {
+                updateTimeoutID = setTimeout(async () => {
                     scheduledUpdate = false;
                     try {
-                        await adaptor.updator(name, cache);
+                        await updateCurrentStorage();
                     } catch (e) {
                         console.error(e);
                     }
                 }, this.updateDelayMs);
             }
-        }
+        };
+        this.#registerdStorageUpdateFunctionList.push(new WeakRef(updateCurrentStorage));
         return this.createDeepProxy(cache, {
             set(target, property, value) {
                 requestUpdate();
@@ -74,9 +87,9 @@ class StorageHelper {
     /**  
      * @deprecated
      * @param {Object} defaultValue 
-     * @param {(data: Object)=>void} legacyUpdator
+     * @param {(data: Object)=>void} legacyUpdater
      */
-    createStorageObject(defaultValue, legacyUpdator) {
+    createStorageObject(defaultValue, legacyUpdater) {
         let scheduledUpdate = false;
         const cache = Object.assign({}, defaultValue);
         const requestUpdate = () => {
@@ -85,7 +98,7 @@ class StorageHelper {
                 setTimeout(async () => {
                     scheduledUpdate = false;
                     try {
-                        await legacyUpdator(cache);
+                        await legacyUpdater(cache);
                     } catch (e) {
                         console.error(e);
                     }
@@ -103,9 +116,8 @@ class StorageHelper {
             }
         });
     }
-    /** @todo Cookie, File, IndexedDB, SQL */
     static ADAPTORS = {
-        LOCAL_STORAGE: new StorageAdapter(
+        LOCAL_STORAGE: new StorageAdaptor(
             (name) => {
                 const existingData = localStorage.getItem(name);
                 try {
@@ -129,8 +141,8 @@ class StorageHelper {
         const defaultValue = localStorage.getItem(name);
         return this.createStorageObject(
             defaultValue ? JSON.parse(defaultValue) : {},
-            (data) => StorageHelper.ADAPTORS.LOCAL_STORAGE.updator(name, data)
+            (data) => StorageHelper.ADAPTORS.LOCAL_STORAGE.updater(name, data)
         );
     }
 }
-export { StorageAdapter, StorageHelper };
+export { StorageAdaptor, /** @deprecated */StorageAdaptor as StorageAdapter, StorageHelper };

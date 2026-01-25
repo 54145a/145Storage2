@@ -12,19 +12,26 @@ My localStorage is a **Javascript  Object** :)
 * **🧩 Modular Adapters**(upcoming): Designed to support multiple storage backends (LocalStorage, File, IndexedDB, etc.).
 
 ### 🚀 Usage
+See test.js for Node.js examples.
 
-```js
-import { StorageHelper } from "@54145a/storage2/storage.js";
-const storage = new StorageHelper();
-const settings = await storage.getStorage("settings", StorageHelper.ADAPTORS.LOCAL_STORAGE);
-settings.count = settings.count ? settings.count + 1 : 1;
-console.info("Count: ", Ssettings.count);
+To run the examples:
+
+```shell
+node --experimental-webstorage --localstorage-file=test.txt test.js
 ```
 
 This project is still in development and should't be used in production.
 ### 🗺 Roadmap
-- [x] LocalStorage
-- [ ] Raw file
-- [ ] Indexed DB
-- [ ] SQL
 - [ ] First Release
+
+#### JSON
+- [x] JSON Adapter
+- [x] LocalStorage
+- [ ] IndexedDB
+
+#### XML
+- [ ] XML
+- [ ] IndexedDB
+
+#### SQL
+- [ ] SQL
