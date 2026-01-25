@@ -22,16 +22,10 @@ node --experimental-webstorage --localstorage-file=test.txt test.js
 
 This project is still in development and should't be used in production.
 ### 🗺 Roadmap
-- [ ] First Release
-
-#### JSON
-- [x] JSON Adapter
+- [x] JSON
 - [x] LocalStorage
 - [ ] IndexedDB
-
-#### XML
 - [ ] XML
-- [ ] IndexedDB
-
-#### SQL
+- [ ] File System
 - [ ] SQL
+- [ ] First Release
