@@ -1,6 +1,6 @@
 ## 145 Storage 2
 
-My localStorage is a **Javascript  Object** :)
+My localStorage is a **Javascript  Object**
 
 > A lightweight, intelligent storage library for JavaScript that makes state persistence as easy as modifying an object.
 
@@ -24,11 +24,11 @@ This project is still in development and should't be used in production.
 ### 🗺 Roadmap
 - [x] JSON
 - [x] LocalStorage
-- [ ] IndexedDB
 - [ ] XML
+- [ ] First Release
+- [ ] IndexedDB
 - [ ] File System
 - [ ] SQL
-- [ ] First Release
 
 <svg width="131" height="42" viewBox="0 0 131 42" fill="none" xmlns="http://www.w3.org/2000/svg">
 <path d="M116 0.5C124.008 0.5 130.5 6.99187 130.5 15V41.5H15C6.99187 41.5 0.5 35.0081 0.5 27V0.5H116Z" fill="white" stroke="black"/>
