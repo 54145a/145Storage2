@@ -9,7 +9,7 @@ My localStorage is a **Javascript  Object** :)
 * **⚡ Auto-Persistence**: Seamlessly syncs object changes to storage (LocalStorage, etc.) without manual save calls.
 * **🛡️ Built-in Debouncing**: Rapid changes (e.g., typing in an input) are automatically batched to prevent excessive I/O operations.
 * **🔍 Deep Proxying**: Automatically tracks changes in nested objects and arrays, ensuring every level of your data is reactive.
-* **🧩 Modular Adapters**(upcoming): Designed to support multiple storage backends (LocalStorage, File, IndexedDB, etc.).
+* **🧩 Modular Adaptors**(upcoming): Designed to support multiple storage backends (LocalStorage, File, IndexedDB, etc.).
 
 ### 🚀 Usage
 See test.js for Node.js examples.
