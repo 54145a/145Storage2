@@ -12,13 +12,7 @@ My localStorage is a **Javascript  Object**
 * **🧩 Modular Adaptors**(upcoming): Designed to support multiple storage backends (LocalStorage, IndexedDB, etc.).
 
 ### 🚀 Usage
-See test.js for Node.js examples.
-
-To run the examples:
-
-```shell
-node --experimental-webstorage --localstorage-file=test.txt test.js
-```
+See test.js for usage examples.
 
 This project is still in development and should't be used in production.
 ### 🗺 Roadmap
