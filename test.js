@@ -1,5 +1,4 @@
-import { StorageHelper } from "./storage.js";
-const storage = new StorageHelper();
-const settings = await storage.getStorage("settings", StorageHelper.ADAPTORS.LOCAL_STORAGE);
+import { WebStorageItemStorage } from "./storage.js";
+const settings = new WebStorageItemStorage("settings", localStorage).data;
 settings.count = settings.count ? settings.count + 1 : 1;
 console.info("Count:", settings.count);
