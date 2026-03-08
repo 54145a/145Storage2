@@ -9,7 +9,7 @@ My localStorage is a **Javascript  Object**
 ```js
 import { WebStorageItemStorage } from "./storage.js";
 const settings = new WebStorageItemStorage("settings", localStorage).data;
-settings.count = settings.count ? settings.count + 1 : 1;
+settings.count = settings.count ? settings.count + 1 : 1;//See?
 console.info("Count:", settings.count);
 ```
 
@@ -20,10 +20,10 @@ This project is still in development and should't be used in production.
 
 - [x] JSON
 - [x] LocalStorage
-- [ ] XML
+- [x] SessionStorage
 - [ ] IndexedDB
-- [ ] File System
-- [ ] SQL
-- [ ] First Release
+- [ ] SyncStorage
 
-![not by ai](https://i0.hdslb.com/bfs/new_dyn/9db9da973beb8dce14ecfe050e0a75713546740225476826.png)
+XML storage was planned but not any more, I'm currently focusing on JSON.
+
+Any kind of contribution is welcomed :)

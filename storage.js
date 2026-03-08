@@ -1,28 +1,80 @@
+class ProxyCacheEntry {
+	/**
+	 * @param {object} proxy 
+	 * @param {readonly string[]} firstPath 
+	 */
+	constructor(proxy, firstPath) {
+		this.proxy = proxy;
+		this.firstPath = firstPath;
+	}
+}
+
+/** @type {WeakMap<object, ProxyCacheEntry>} */
 const deepProxyCache = new WeakMap();
+
 /** @type { WeakRef<StorageInterface>[] } */
 const registeredStorages = [];
+
 /**
- * @param {Object} target
- * @param {ProxyHandler<Object>} handler
- * @returns {Object<any,any>}
+ * @typedef {Object} DeepProxyHandler
+ * @property {(target: Object, path: readonly string[], receiver: Object) => any} [get]
+ * @property {(target: Object, path: readonly string[], value: any, receiver: Object) => boolean} [set]
+ * @property {(target: Object, path: readonly string[]) => boolean} [deleteProperty]
  */
-function createDeepProxy(target, handler) {
-	const deepHandler = Object.assign({}, handler);
-	deepHandler.get = (target, property) => {
-		const value = Reflect.get(target, property);
-		if (typeof value === "object" && typeof value !== "function" && value !== null) {
-			if (!deepProxyCache.has(value)) deepProxyCache.set(value, createDeepProxy(value, handler));
-			return deepProxyCache.get(value);
-		} else {
-			if (handler.get) {
-				return handler.get(target, property, undefined);
-			} else {
-				return value;
-			}
+/**
+ * @param {object} target
+ * @param {DeepProxyHandler} handler
+ * @param {readonly string[]} [currentPath=[]]
+ * @returns {*}
+ */
+function createDeepProxy(target, handler, currentPath = []) {
+	const cacheEntry = deepProxyCache.get(target);
+	if (cacheEntry) {
+		if (cacheEntry.firstPath.join('.') !== currentPath.join('.')) {
+			console.warn(
+				"Same object with different paths.",
+				"First path:", cacheEntry.firstPath,
+				"Current path:", currentPath
+			);
 		}
-	};
-	return new Proxy(target, deepHandler);
+		return cacheEntry.proxy;
+	}
+	const proxy = new Proxy(target, {
+		get(obj, prop, receiver) {
+			const path = Object.freeze([...currentPath, prop.toString()]);
+			if (handler.get) {
+				const result = handler.get(obj, path, receiver);
+				if (typeof result === "object" && result !== null && typeof result !== "function") {
+					return createDeepProxy(result, handler, path);
+				}
+				return result;
+			}
+
+			const value = Reflect.get(obj, prop, receiver);
+			if (typeof value === "object" && value !== null && typeof value !== "function") {
+				return createDeepProxy(value, handler, path);
+			}
+			return value;
+		},
+		set(obj, prop, value, receiver) {
+			const path = [...currentPath, String(prop)];
+			if (handler.set) {
+				return handler.set(obj, path, value, receiver);
+			}
+			return Reflect.set(obj, prop, value, receiver);
+		},
+		deleteProperty(obj, prop) {
+			const path = [...currentPath, String(prop)];
+			if (handler.deleteProperty) {
+				return handler.deleteProperty(obj, path);
+			}
+			return Reflect.deleteProperty(obj, prop);
+		}
+	});
+	deepProxyCache.set(target, new ProxyCacheEntry(proxy, currentPath));
+	return proxy;
 }
+
 class StorageInterface {
 	/**
 	 * @param {any} initialValue 
@@ -80,13 +132,15 @@ class JSONStorage extends StorageInterface {
 	constructor(initialValue, updator, updateDelayMs) {
 		super(initialValue, updator, updateDelayMs);
 		this.data = createDeepProxy(this.cache, {
-			set: (target, property, value) => {
+			set: (target, path, value, receiver) => {
 				this.requestUpdate();
-				return Reflect.set(target, property, value);
+				const prop = path[path.length - 1];
+				return Reflect.set(target, prop, value, receiver);
 			},
-			deleteProperty: (target, property) => {
+			deleteProperty: (target, path) => {
 				this.requestUpdate();
-				return Reflect.deleteProperty(target, property);
+				const prop = path[path.length - 1];
+				return Reflect.deleteProperty(target, prop);
 			}
 		});
 		this.init();
@@ -163,7 +217,7 @@ class StorageHelper {
 				localStorage.setItem(name, JSON.stringify(data));
 			}
 		)
-	}
+	};
 }
 export {
 	WebStorageItemStorage,
