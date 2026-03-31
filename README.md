@@ -6,7 +6,6 @@ My KV is a **JSON Object**
 
 ### 🚀 Never as easy
 
-#### Single item
 ```js
 import { WebStorageItemStorage } from "./storage.js";
 const settings = new WebStorageItemStorage("settings", localStorage).data;
