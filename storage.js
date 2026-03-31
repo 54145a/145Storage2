@@ -1,3 +1,8 @@
+/**
+ * @author 145a
+ * @license AGPL-3.0
+ */
+
 class ProxyCacheEntry {
 	/**
 	 * @param {object} proxy 
@@ -30,7 +35,7 @@ const registeredStorages = [];
 function createDeepProxy(target, handler, currentPath = []) {
 	const cacheEntry = deepProxyCache.get(target);
 	if (cacheEntry) {
-		if (cacheEntry.firstPath.join('.') !== currentPath.join('.')) {
+		if (cacheEntry.firstPath.join(".") !== currentPath.join(".")) {
 			console.warn(
 				"Same object with different paths.",
 				"First path:", cacheEntry.firstPath,
@@ -39,8 +44,15 @@ function createDeepProxy(target, handler, currentPath = []) {
 		}
 		return cacheEntry.proxy;
 	}
+	/**
+	 * @param {keyof any} prop 
+	 */
+	const assertSymbol = prop => {
+		console.assert(typeof prop !== "symbol", "Symbol properties are not supported by createDeepProxy.");
+	};
 	const proxy = new Proxy(target, {
 		get(obj, prop, receiver) {
+			assertSymbol(prop);
 			const path = Object.freeze([...currentPath, prop.toString()]);
 			if (handler.get) {
 				const result = handler.get(obj, path, receiver);
@@ -49,7 +61,6 @@ function createDeepProxy(target, handler, currentPath = []) {
 				}
 				return result;
 			}
-
 			const value = Reflect.get(obj, prop, receiver);
 			if (typeof value === "object" && value !== null && typeof value !== "function") {
 				return createDeepProxy(value, handler, path);
@@ -57,6 +68,7 @@ function createDeepProxy(target, handler, currentPath = []) {
 			return value;
 		},
 		set(obj, prop, value, receiver) {
+			assertSymbol(prop);
 			const path = [...currentPath, String(prop)];
 			if (handler.set) {
 				return handler.set(obj, path, value, receiver);
@@ -64,6 +76,7 @@ function createDeepProxy(target, handler, currentPath = []) {
 			return Reflect.set(obj, prop, value, receiver);
 		},
 		deleteProperty(obj, prop) {
+			assertSymbol(prop);
 			const path = [...currentPath, String(prop)];
 			if (handler.deleteProperty) {
 				return handler.deleteProperty(obj, path);
@@ -74,46 +87,61 @@ function createDeepProxy(target, handler, currentPath = []) {
 	deepProxyCache.set(target, new ProxyCacheEntry(proxy, currentPath));
 	return proxy;
 }
-
 class StorageInterface {
+	constructor() {
+		const proto = Object.getPrototypeOf(this);
+		for (const key of Object.getOwnPropertyNames(proto)) {
+			const descriptor = Object.getOwnPropertyDescriptor(proto, key);
+			if (descriptor?.set && !descriptor.get) {
+				throw new TypeError();
+			}
+		}
+		registeredStorages.push(new WeakRef(this));
+	}
+	/** @returns {Promise<void>|void} */
+	init() { }
+	isReady = false;
+	assertReady() {
+		if (!this.isReady) throw new Error("Storage not ready. Call .init() first.");
+	}
+	/** @type {any} */
+	data;
+	/** @type {number|undefined} */
+	updateTimerID;
+	async update() {
+		this.assertReady();
+		this.scheduledUpdate = false;
+	}
+}
+//#region 
+class DebounceStorage extends StorageInterface {
 	/**
 	 * @param {any} initialValue 
 	 * @param {(value: any)=>Promise<void>|void} updator
 	 * @param {number} updateDelayMs  
 	 */
 	constructor(initialValue, updator, updateDelayMs = 100) {
+		super();
 		Object.assign(this.cache, initialValue);
 		this.updator = updator;
 		this.updateDelayMs = updateDelayMs;
-		registeredStorages.push(new WeakRef(this));
 	}
-	isReady = false;
 	/** @returns {Promise<void>|void} */
 	init() {
 		this.isReady = true;
 	};
-	assertReady() {
-		if (!this.isReady) throw new Error("Storage not ready, call .init() first.");
-	}
 	/** @protected */
 	cache = {};
 	scheduledUpdate = false;
-	/**
-	 * @type {NonNullable<any>}
-	 */
-	data;
 	async update() {
-		this.assertReady();
-		this.scheduledUpdate = false;
+		super.update();
 		await this.updator(this.cache);
-	};
-	/** @type {number|undefined} */
-	updateTimeoutID;
+	}
 	requestUpdate() {
 		this.assertReady();
 		if (!this.scheduledUpdate) {
 			this.scheduledUpdate = true;
-			this.updateTimeoutID = setTimeout(async () => {
+			this.updateTimerID = setTimeout(async () => {
 				try {
 					await this.update();
 				} catch (e) {
@@ -123,7 +151,7 @@ class StorageInterface {
 		}
 	}
 }
-class JSONStorage extends StorageInterface {
+class JSONDebounceStorage extends DebounceStorage {
 	/**
 	 * @param {Object} initialValue 
 	 * @param {(value: Object)=>Promise<void>|void} updator
@@ -148,7 +176,7 @@ class JSONStorage extends StorageInterface {
 	/** @type {ReturnType<createDeepProxy>} */
 	data;
 }
-class WebStorageItemStorage extends JSONStorage {
+class WebStorageItemStorage extends JSONDebounceStorage {
 	/**
 	 * @param {string} itemName
 	 * @param {Storage} instance 
@@ -156,12 +184,13 @@ class WebStorageItemStorage extends JSONStorage {
 	 */
 	constructor(itemName, instance, updateDelayMs) {
 		const existingData = instance.getItem(itemName);
+		let initialValue = {};
 		try {
-			super(existingData ? JSON.parse(existingData) : {}, value => instance.setItem(itemName, JSON.stringify(value)), updateDelayMs);
+			initialValue = existingData ? JSON.parse(existingData) : {};
 		} catch (e) {
 			console.error(e);
-			super({}, () => { }, 0);
 		}
+		super(initialValue, value => instance.setItem(itemName, JSON.stringify(value)), updateDelayMs);
 	}
 }
 /** @deprecated */
@@ -176,20 +205,189 @@ class JSONStorageAdaptor {
 		this.updater = updater;
 	}
 };
+
+//#endregion
+
+const SCHEMA_KEY = "__145Storage__flatSchema__";
+
+/** @typedef {Object} FlatStorageAdapter
+ * @property {(key: string) => Promise<any> | any} get
+ * @property {(key: string, value: any) => Promise<void> | void} set
+ * @property {(key: string) => Promise<void> | void} delete
+ */
+
+class FlatJSONStorage extends StorageInterface {
+	/**
+	 * @param {FlatStorageAdapter} adapter
+	 * @param {Object} [options]
+	 * @param {string} [options.namespace]
+	 */
+	constructor(adapter, options = {}) {
+		super();
+		const { namespace } = options;
+		if (namespace) {
+			const rawAdapter = adapter;
+			/**
+			 * @type {FlatStorageAdapter}
+			 */
+			this.adapter = {
+				get: (key) => rawAdapter.get(`${namespace}:${key}`),
+				set: (key, value) => rawAdapter.set(`${namespace}:${key}`, value),
+				delete: (key) => rawAdapter.delete(`${namespace}:${key}`),
+			};
+		} else {
+			this.adapter = adapter;
+		}
+		/** @type {{ [k: string]: any }} */
+		this.schema = {};
+		/** @type {Map<string, any>} */
+		this.cache = new Map();
+		/** @type {any} */
+		this.data = createDeepProxy({}, {
+			get: (target, path) => {
+				this.assertReady();
+				const key = path.join(".");
+				const schemaNode = this._getSchemaNode(path);
+				if (schemaNode && typeof schemaNode === "object") {
+					return createDeepProxy({}, this.data.handler, path);
+				}
+				if (this.cache.has(key)) {
+					return this.cache.get(key);
+				}
+				throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
+			},
+			set: (target, path, value) => {
+				const key = path.join(".");
+				this.cache.set(key, value);
+				this._createSchemaNode(path);
+				(async () => {
+					await this.adapter.set(key, value);
+				})().catch(console.error);
+				return true;
+			},
+			deleteProperty: (target, path) => {
+				const key = path.join(".");
+				const schemaNode = this._getSchemaNode(path);
+				if (schemaNode && typeof schemaNode === "object") {
+					const prefix = key + ".";
+					const keysToDelete = [...this.cache.keys()].filter(k => k.startsWith(prefix));
+					keysToDelete.forEach(k => this.delete(k));
+				}
+				this.delete(key);
+				this._deleteSchemaNode(path);
+				return true;
+			}
+		}, []);
+	}
+	/** @override */
+	async init() {
+		const storedSchema = await this.adapter.get(SCHEMA_KEY);
+		if (storedSchema && typeof storedSchema === "object") {
+			this.schema = storedSchema;
+		} else {
+			this.schema = {};
+			await this._updateSchema();
+		}
+		this.isReady = true;
+	}
+	async _updateSchema() {
+		await this.adapter.set(SCHEMA_KEY, this.schema);
+	}
+	/** @param {readonly string[]} path */
+	_createSchemaNode(path) {
+		let node = this.schema;
+		for (let i = 0; i < path.length - 1; i++) {
+			const key = path[i];
+			if (!node[key] || typeof node[key] !== "object") node[key] = {};
+			node = node[key];
+		}
+		node[path[path.length - 1]] = 0;
+		this._updateSchema().catch(console.error);
+	}
+	/** @param {readonly string[]} path */
+	_deleteSchemaNode(path) {
+		if (path.length === 0) return;
+		let node = this.schema;
+		for (let i = 0; i < path.length - 1; i++) {
+			if (!node[path[i]]) return;
+			node = node[path[i]];
+		}
+		delete node[path[path.length - 1]];
+		this._updateSchema().catch(console.error);
+	}
+	/** @param {string} key */
+	async load(key) {
+		const value = await this.adapter.get(key);
+		this.cache.set(key, value);
+		return value;
+	}
+	/** @param {string} key */
+	async delete(key) {
+		this.cache.delete(key);
+		await this.adapter.delete(key);
+	}
+	/** @param {readonly string[]} path */
+	_getSchemaNode(path) {
+		let node = this.schema;
+		for (const key of path) {
+			if (node && typeof node === "object") node = node[key];
+			else return undefined;
+		}
+		return node;
+	}
+	/** @param {readonly string[]} strings @param {readonly any[]} keys */
+	async get(strings, ...keys) {
+		let path = strings[0];
+		keys.forEach((k, i) => path += k + strings[i + 1]);
+		return this.load(path);
+	}
+	getSchema() {
+		return this.schema;
+	}
+}
+class FlatWebStorage extends FlatJSONStorage {
+	/**
+	 * @param {Object} options
+	 * @param {string} [options.namespace]
+	 * @param {Storage} options.instance
+	 */
+	constructor(options) {
+		const { instance, ...rest } = options;
+		if (!instance) throw new TypeError("Storage instance is required");
+		/**
+		 * @type {FlatStorageAdapter}
+		 */
+		const adapter = {
+			get: (key) => {
+				const val = instance.getItem(key);
+				return val ? JSON.parse(val) : undefined;
+			},
+			set: (key, value) => {
+				instance.setItem(key, JSON.stringify(value));
+			},
+			delete: (key) => {
+				instance.removeItem(key);
+			}
+		};
+		super(adapter, rest);
+	}
+}
+
 if (typeof addEventListener !== "undefined") {
-	addEventListener("beforeunload", event => {
+	addEventListener("visibilitychange", event => {
 		for (const storage of registeredStorages.map(ref => ref.deref())) {
 			if (!storage || !storage.scheduledUpdate) continue;
-			clearTimeout(storage.updateTimeoutID);
+			clearTimeout(storage.updateTimerID);
+			clearInterval(storage.updateTimerID);
 			storage.update();
 		}
 	});
 }
+
 /** @deprecated */
 class StorageHelper {
 	constructor(updateDelayMs = 100) {
 		this.updateDelayMs = updateDelayMs;
-
 	}
 	/**
 	 * @deprecated
@@ -198,7 +396,7 @@ class StorageHelper {
 	 * @returns {Promise<any>}
 	 */
 	async getStorage(name, adaptor) {
-		const newStorage = new JSONStorage(await adaptor.initialValueGetter(name) ?? {}, value => adaptor.updater(name, value), this.updateDelayMs);
+		const newStorage = new JSONDebounceStorage(await adaptor.initialValueGetter(name) ?? {}, value => adaptor.updater(name, value), this.updateDelayMs);
 		return newStorage.data;
 	}
 	/** @deprecated */
@@ -220,10 +418,12 @@ class StorageHelper {
 	};
 }
 export {
-	WebStorageItemStorage,
 	/** @deprecated */
 	JSONStorageAdaptor,
 	/** @deprecated */
 	JSONStorageAdaptor as StorageAdaptor,
-	StorageHelper
+	WebStorageItemStorage,
+	StorageHelper,
+	FlatJSONStorage,
+	FlatWebStorage
 };
