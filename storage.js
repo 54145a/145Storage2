@@ -335,7 +335,9 @@ class FlatJSONStorage extends StorageInterface {
 		}
 		return node;
 	}
-	/** @param {readonly string[]} strings @param {readonly any[]} keys */
+	/** @param {readonly string[]} strings
+	 * @param {readonly any[]} keys
+	 */
 	async get(strings, ...keys) {
 		let path = strings[0];
 		keys.forEach((k, i) => path += k + strings[i + 1]);
