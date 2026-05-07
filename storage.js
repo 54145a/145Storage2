@@ -1,3 +1,4 @@
+//@ts-check
 /**
  * @author 145a
  * @license AGPL-3.0
