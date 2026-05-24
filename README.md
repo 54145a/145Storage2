@@ -1,10 +1,10 @@
-## 145 Storage 2
+# 145 Storage 2
 
 My KV is a **JSON Object**
 
 > A lightweight, intelligent storage library for JavaScript that makes state persistence as easy as modifying an object.
 
-### 🚀 Never as easy
+## 🚀 Never as easy
 
 ```js
 import { WebStorageItemStorage } from "./storage.js";
@@ -15,7 +15,8 @@ console.info("Count:", settings.count);
 
 See test.js for more examples. (Working in progress)
 
-### 🗺 Roadmap
+## 🗺 Roadmap
+
 This project is still in development and should't be used in production.
 
 - [x] JSON
