@@ -59,7 +59,8 @@ const deepProxyCache = new WeakMap();
 const registeredStorages = [];
 
 /**
- * @typedef {Object} DeepProxyHandler
+ * @typedef {object} DeepProxyHandler
+ * @property {(target: Object, path: readonly string[]) => boolean} [has]
  * @property {(target: Object, path: readonly string[], receiver: Object) => any} [get]
  * @property {(target: Object, path: readonly string[], value: any, receiver: Object|undefined) => boolean} [set]
  * @property {(target: Object, path: readonly string[]) => boolean} [deleteProperty]
@@ -104,6 +105,14 @@ function createDeepProxy(target, handler, currentPath = []) {
 		console.assert(typeof prop !== "symbol", "Symbol properties are not supported by createDeepProxy.");
 	};
 	const proxy = new Proxy(target, {
+		has(target, prop) {
+			assertSymbol(prop);
+			const path = [...currentPath, String(prop)];
+			if (handler.has) {
+				return handler.has(target, path);
+			}
+			return Reflect.has(target, prop);
+		},
 		get(obj, prop, receiver) {
 			assertSymbol(prop);
 			const path = Object.freeze([...currentPath, prop.toString()]);
@@ -249,7 +258,7 @@ class DebounceStorage extends StorageInterface {
 }
 class JSONDebounceStorage extends DebounceStorage {
 	/**
-	 * @param {Object} initialValue 
+	 * @param {object} initialValue 
 	 * @param {(value: Object)=>Promise<void>|void} updator
 	 * @param {number=} updateDelayMs  
 	 */
@@ -306,7 +315,7 @@ class JSONStorageAdaptor {
 
 const SCHEMA_KEY = "__145Storage__flatSchema__";
 
-/** @typedef {Object} FlatStorageAdapter
+/** @typedef {object} FlatStorageAdapter
  * @property {(key: string) => Promise<any> | any} get
  * @property {(key: string, value: any) => Promise<void> | void} set
  * @property {(key: string) => Promise<void> | void} delete
@@ -315,7 +324,7 @@ const SCHEMA_KEY = "__145Storage__flatSchema__";
 class FlatJSONStorage extends StorageInterface {
 	/**
 	 * @param {FlatStorageAdapter} adapter
-	 * @param {Object} [options]
+	 * @param {object} [options]
 	 * @param {string} [options.namespace]
 	 */
 	constructor(adapter, options = {}) {
@@ -345,6 +354,10 @@ class FlatJSONStorage extends StorageInterface {
 		 * @readonly
 		 */
 		this._handler = {
+			has: (target, path) => {
+				const schemaNode = this._getSchemaNode(path);
+				return schemaNode !== undefined;
+			},
 			get: (target, path) => {
 				this.assertReady();
 				const key = path.join(".");
@@ -662,7 +675,7 @@ class FlatJSONStorage extends StorageInterface {
 }
 class FlatWebStorage extends FlatJSONStorage {
 	/**
-	 * @param {Object} options
+	 * @param {object} options
 	 * @param {string} [options.namespace]
 	 * @param {Storage} options.instance
 	 */
