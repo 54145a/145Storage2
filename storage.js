@@ -169,7 +169,7 @@ class StorageInterface {
 		this.scheduledUpdate = false;
 	}
 }
-//#region 
+//#region
 class DebounceStorage extends StorageInterface {
 	/**
 	 * @param {any} initialValue 
@@ -189,6 +189,13 @@ class DebounceStorage extends StorageInterface {
 	/** @protected */
 	cache = {};
 	scheduledUpdate = false;
+	abort() {
+		if (this.updateTimerID) {
+			clearTimeout(this.updateTimerID);
+			this.updateTimerID = undefined;
+		}
+		this.scheduledUpdate = false;
+	}
 	async update() {
 		super.update();
 		await this.updator(this.cache);
