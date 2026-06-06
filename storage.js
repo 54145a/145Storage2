@@ -306,7 +306,7 @@ class FlatJSONStorage extends StorageInterface {
 		/** @type {Map<string, any>} */
 		this.cache = new Map();
 		/**
-		 * @type {DeepProxyHandler}
+		 * @type {DeepProxyHandler & { set: NonNullable<DeepProxyHandler["set"]>}}
 		 * @readonly
 		 */
 		this._handler = {
