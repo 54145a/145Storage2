@@ -158,6 +158,19 @@ function createDeepProxy(target, handler, currentPath = []) {
 	return proxy;
 }
 class StorageInterface {
+	/**
+	 * @param {*} observed 
+	 * @returns {*}
+	 */
+	static getRaw(observed) {
+		if (typeof observed !== 'object' || observed === null) return observed;
+		try {
+			return JSON.parse(JSON.stringify(observed));
+		} catch (e) {
+			console.error("[StorageInterface] Failed to get raw value. Possibly unloaded keys or non-serializable data.", e);
+			throw e;
+		}
+	}
 	constructor() {
 		const proto = Object.getPrototypeOf(this);
 		for (const key of Object.getOwnPropertyNames(proto)) {
@@ -335,6 +348,9 @@ class FlatJSONStorage extends StorageInterface {
 				const schemaNode = this._getSchemaNode(path);
 				if (schemaNode && typeof schemaNode === "object") {
 					if (Array.isArray(schemaNode)) {
+						if (!this.cache.has(key) && !this.arrayDebouncers.has(key)) {
+							throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
+						}
 						const debouncer = this._getOrCreateArrayDebouncer(key);
 						return new DeepProxyPenetrateResult(debouncer.data);
 					}
@@ -355,22 +371,18 @@ class FlatJSONStorage extends StorageInterface {
 			},
 			set: (target, path, value) => {
 				const key = path.join(".");
-
 				if (typeof value === "object" && value !== null) {
 					try {
-						value = structuredClone(value);
+						value = StorageInterface.getRaw(value);
 					} catch (e) {
-						console.error("[FlatJSONStorage] Failed to clone value.", e);
 						return false;
 					}
 				}
-
 				if (!isFlatStorageStorable(value)) {
 					throw new TypeError(
 						`[FlatJSONStorage] Invalid value at "${key}". Only plain objects, and arrays containing only numbers/strings/booleans/null are allowed.`
 					);
 				}
-
 				const oldSchemaNode = this._getSchemaNode(path);
 				if (oldSchemaNode !== undefined && typeof oldSchemaNode === "object") {
 					if (Array.isArray(oldSchemaNode) && !Array.isArray(value)) {
@@ -383,9 +395,9 @@ class FlatJSONStorage extends StorageInterface {
 						(async () => { await this.adapter.delete(k); })().catch(console.error);
 					});
 				}
-
 				if (isPlainObject(value)) {
-					this.cache.set(key, value);
+					// 🌟 修改：只存空壳，不存完整对象，避免内存数据冗余
+					this.cache.set(key, {});
 					let node = this.schema;
 					for (let i = 0; i < path.length - 1; i++) {
 						if (!node[path[i]] || typeof node[path[i]] !== "object") node[path[i]] = {};
@@ -399,7 +411,6 @@ class FlatJSONStorage extends StorageInterface {
 				} else if (Array.isArray(value)) {
 					const debouncer = this._getOrCreateArrayDebouncer(key, value);
 					debouncer.data.splice(0, debouncer.data.length, ...value);
-
 					let node = this.schema;
 					for (let i = 0; i < path.length - 1; i++) {
 						if (!node[path[i]] || typeof node[path[i]] !== "object") node[path[i]] = {};
@@ -454,42 +465,6 @@ class FlatJSONStorage extends StorageInterface {
 		}
 		this.data = createDeepProxy({}, this._handler);
 	}
-	/*this.data = createDeepProxy({}, {
-		get: (target, path) => {
-			this.assertReady();
-			const key = path.join(".");
-			const schemaNode = this._getSchemaNode(path);
-			if (schemaNode && typeof schemaNode === "object") {
-				return createDeepProxy({}, this.data.handler, path);
-			}
-			if (this.cache.has(key)) {
-				return this.cache.get(key);
-			}
-			throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
-		},
-		set: (target, path, value) => {
-			const key = path.join(".");
-			this.cache.set(key, value);
-			this._createSchemaNode(path);
-			(async () => {
-				await this.adapter.set(key, value);
-			})().catch(console.error);
-			return true;
-		},
-		deleteProperty: (target, path) => {
-			const key = path.join(".");
-			const schemaNode = this._getSchemaNode(path);
-			if (schemaNode && typeof schemaNode === "object") {
-				const prefix = key + ".";
-				const keysToDelete = [...this.cache.keys()].filter(k => k.startsWith(prefix));
-				keysToDelete.forEach(k => this.delete(k));
-			}
-			this.delete(key);
-			this._deleteSchemaNode(path);
-			return true;
-		}
-	}, []);
-}*/
 	/** @override */
 	async init() {
 		const storedSchema = await this.adapter.get(SCHEMA_KEY);
@@ -501,6 +476,48 @@ class FlatJSONStorage extends StorageInterface {
 		}
 		this.isReady = true;
 	}
+	/** 
+	 * @param {*} node 
+	 * @returns {boolean}
+	 */
+	_isLeafNode(node) {
+		if (node === null || node === undefined) return false;
+		if (typeof node !== 'object') return true;
+		if (Array.isArray(node)) return true;
+		return false;
+	}
+	/**
+	 * @param {string} [key=""]
+	 * @returns {string[]}
+	 */
+	getSubKeys(key = "") {
+		const path = key === "" ? [] : key.split(".");
+		const node = this._getSchemaNode(path);
+		if (node === undefined) return [];
+
+		if (this._isLeafNode(node)) {
+			return [key];
+		}
+		/** @type {string[]} */
+		const keys = [];
+		/**
+		 * @param {{[k: string]: any}} currentNode
+		 * @param {string[]} currentPath
+		 */
+		const traverseSchema = (currentNode, currentPath) => {
+			for (const subKey of Object.keys(currentNode)) {
+				const childPath = [...currentPath, subKey];
+				const childNode = currentNode[subKey];
+				if (this._isLeafNode(childNode)) {
+					keys.push(childPath.join("."));
+				} else {
+					traverseSchema(childNode, childPath);
+				}
+			}
+		};
+		traverseSchema(node, path);
+		return keys;
+	};
 	async _updateSchema() {
 		await this.adapter.set(SCHEMA_KEY, this.schema);
 	}
@@ -526,16 +543,61 @@ class FlatJSONStorage extends StorageInterface {
 		delete node[path[path.length - 1]];
 		this._updateSchema().catch(console.error);
 	}
-	/** @param {string} key */
-	async load(key) {
-		const value = await this.adapter.get(key);
-		this.cache.set(key, value);
-		return value;
+	/** 
+	 * @param {string} key 
+	 */
+	async load(key = "") {
+		const path = key === "" ? [] : key.split(".");
+		const node = this._getSchemaNode(path);
+		if (node === undefined) return;
+
+		const subKeys = this.getSubKeys(key);
+		for (const flatKey of subKeys) {
+			if (!this.cache.has(flatKey)) {
+				const value = await this.adapter.get(flatKey);
+				this.cache.set(flatKey, value);
+				const flatPath = flatKey.split(".");
+				const flatNode = this._getSchemaNode(flatPath);
+				if (Array.isArray(flatNode)) {
+					this._getOrCreateArrayDebouncer(flatKey, value);
+				}
+			}
+		}
+		if (node && typeof node === 'object' && !Array.isArray(node)) {
+			if (!this.cache.has(key)) {
+				this.cache.set(key, {});
+			}
+		}
 	}
-	/** @param {string} key */
-	async delete(key) {
-		this.cache.delete(key);
-		await this.adapter.delete(key);
+	/** 
+	 * @param {string} key 
+	 */
+	async delete(key = "") {
+		const path = key === "" ? [] : key.split(".");
+		const node = this._getSchemaNode(path);
+		if (node === undefined) return;
+
+		const subKeys = this.getSubKeys(key);
+		for (const flatKey of subKeys) {
+			this.cache.delete(flatKey);
+			await this.adapter.delete(flatKey);
+			const flatPath = flatKey.split(".");
+			const flatNode = this._getSchemaNode(flatPath);
+			if (Array.isArray(flatNode)) {
+				this._abortArrayDebouncer(flatKey);
+			}
+		}
+
+		const prefix = key === "" ? "" : key + ".";
+		const objKeysToDelete = [...this.cache.keys()].filter(k => k.startsWith(prefix) || k === key);
+		objKeysToDelete.forEach(k => this.cache.delete(k));
+
+		if (path.length === 0) {
+			this.schema = {};
+			await this._updateSchema();
+		} else {
+			this._deleteSchemaNode(path);
+		}
 	}
 	/** @param {readonly string[]} path */
 	_getSchemaNode(path) {
@@ -673,13 +735,14 @@ class StorageHelper {
 		)
 	};
 }
+
 export {
-	/** @deprecated */
-	JSONStorageAdaptor,
-	/** @deprecated */
-	JSONStorageAdaptor as StorageAdaptor,
+    /** @deprecated */ JSONStorageAdaptor,
+    /** @deprecated */ JSONStorageAdaptor as StorageAdaptor,
 	WebStorageItemStorage,
 	StorageHelper,
+	StorageInterface,
 	FlatJSONStorage,
 	FlatWebStorage
 };
+
