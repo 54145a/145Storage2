@@ -731,7 +731,7 @@ class StorageHelper {
 	 */
 	async getStorage(name, adaptor) {
 		const newStorage = new JSONDebounceStorage(await adaptor.initialValueGetter(name) ?? {}, value => adaptor.updater(name, value), this.updateDelayMs);
-		return newStorage._data;
+		return newStorage.data;
 	}
 	/** @deprecated */
 	static ADAPTORS = {
