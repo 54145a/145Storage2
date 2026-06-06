@@ -188,7 +188,10 @@ class StorageInterface {
 		if (!this.isReady) throw new Error("Storage not ready. Call .init() first.");
 	}
 	/** @type {any} */
-	data;
+	_data;
+	get data() {
+		return this._data;
+	}
 	/** @type {number|undefined} */
 	updateTimerID;
 	async update() {
@@ -252,7 +255,7 @@ class JSONDebounceStorage extends DebounceStorage {
 	 */
 	constructor(initialValue, updator, updateDelayMs) {
 		super(initialValue, updator, updateDelayMs);
-		this.data = createDeepProxy(this._cache, {
+		this._data = createDeepProxy(this._cache, {
 			set: (target, path, value, receiver) => {
 				this.requestUpdate();
 				const prop = path[path.length - 1];
@@ -267,7 +270,7 @@ class JSONDebounceStorage extends DebounceStorage {
 		this.init();
 	}
 	/** @type {ReturnType<createDeepProxy>} */
-	data;
+	_data;
 }
 class WebStorageItemStorage extends JSONDebounceStorage {
 	/**
@@ -352,7 +355,7 @@ class FlatJSONStorage extends StorageInterface {
 							throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
 						}
 						const debouncer = this._getOrCreateArrayDebouncer(key);
-						return new DeepProxyPenetrateResult(debouncer.data);
+						return new DeepProxyPenetrateResult(debouncer._data);
 					}
 					let subTarget = this.cache.get(key);
 					if (!subTarget || typeof subTarget !== "object") {
@@ -396,7 +399,6 @@ class FlatJSONStorage extends StorageInterface {
 					});
 				}
 				if (isPlainObject(value)) {
-					// 🌟 修改：只存空壳，不存完整对象，避免内存数据冗余
 					this.cache.set(key, {});
 					let node = this.schema;
 					for (let i = 0; i < path.length - 1; i++) {
@@ -410,7 +412,7 @@ class FlatJSONStorage extends StorageInterface {
 					this._updateSchema().catch(console.error);
 				} else if (Array.isArray(value)) {
 					const debouncer = this._getOrCreateArrayDebouncer(key, value);
-					debouncer.data.splice(0, debouncer.data.length, ...value);
+					debouncer._data.splice(0, debouncer._data.length, ...value);
 					let node = this.schema;
 					for (let i = 0; i < path.length - 1; i++) {
 						if (!node[path[i]] || typeof node[path[i]] !== "object") node[path[i]] = {};
@@ -463,7 +465,7 @@ class FlatJSONStorage extends StorageInterface {
 				return undefined;
 			}
 		}
-		this.data = createDeepProxy({}, this._handler);
+		this._data = createDeepProxy({}, this._handler);
 	}
 	/** @override */
 	async init() {
@@ -654,6 +656,7 @@ class FlatJSONStorage extends StorageInterface {
 		if (debouncer) {
 			debouncer.abort();
 			this.arrayDebouncers.delete(key);
+			this.cache.delete(key);
 		}
 	}
 }
@@ -715,7 +718,7 @@ class StorageHelper {
 	 */
 	async getStorage(name, adaptor) {
 		const newStorage = new JSONDebounceStorage(await adaptor.initialValueGetter(name) ?? {}, value => adaptor.updater(name, value), this.updateDelayMs);
-		return newStorage.data;
+		return newStorage._data;
 	}
 	/** @deprecated */
 	static ADAPTORS = {
