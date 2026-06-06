@@ -388,10 +388,15 @@ class FlatJSONStorage extends StorageInterface {
 			set: (target, path, value) => {
 				const key = path.join(".");
 				if (typeof value === "object" && value !== null) {
+					if (!Array.isArray(value) && !isPlainObject(value)) {
+						throw new TypeError(
+							`[FlatJSONStorage] Invalid value at "${key}". Only plain objects, and arrays containing only numbers/strings/booleans/null are allowed.`
+						);
+					}
 					try {
 						value = StorageInterface.getRaw(value);
 					} catch (e) {
-						return false;
+						throw new TypeError(`[FlatJSONStorage] Failed to serialize value at "${key}".`);
 					}
 				}
 				if (!isFlatStorageStorable(value)) {
