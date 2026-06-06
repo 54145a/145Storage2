@@ -15,7 +15,7 @@ function isPlainObject(value) {
 /**
  * @param {*} value
  */
-function isStorableValue(value) {
+function isFlatStorageStorable(value) {
 	const type = typeof value;
 	if (type === "number" || type === "string" || type === "boolean" || value === null) return true;
 	if (value === undefined || type === "function" || type === "symbol") return false;
@@ -32,7 +32,7 @@ function isStorableValue(value) {
 		}
 		if (isPlainObject(value)) {
 			for (const subKey of Object.keys(value)) {
-				if (!isStorableValue(value[subKey])) return false;
+				if (!isFlatStorageStorable(value[subKey])) return false;
 			}
 			return true;
 		}
@@ -219,7 +219,7 @@ class JSONDebounceStorage extends DebounceStorage {
 			set: (target, path, value, receiver) => {
 				this.requestUpdate();
 				const prop = path[path.length - 1];
-				return Reflect.set(target, prop, value, receiver);
+				return Reflect.set(target, prop, value, Array.isArray(target) ? target : receiver);
 			},
 			deleteProperty: (target, path) => {
 				this.requestUpdate();
@@ -313,7 +313,7 @@ class FlatJSONStorage extends StorageInterface {
 						subTarget = {};
 						this.cache.set(key, subTarget);
 					}
-					return createDeepProxy(subTarget, this.data.handler, path);
+					return createDeepProxy(subTarget, this._handler, path);
 				}
 				if (this.cache.has(key)) {
 					return this.cache.get(key);
@@ -325,7 +325,7 @@ class FlatJSONStorage extends StorageInterface {
 			},
 			set: (target, path, value) => {
 				const key = path.join(".");
-				if (!isStorableValue(value)) {
+				if (!isFlatStorageStorable(value)) {
 					throw new TypeError(
 						`[FlatJSONStorage] Invalid value at "${key}". Only plain objects, and arrays containing only numbers/strings/booleans/null are allowed.`
 					);
