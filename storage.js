@@ -3,6 +3,44 @@
  * @license AGPL-3.0
  */
 
+/**
+ * @param {*} value
+ */
+function isPlainObject(value) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const proto = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
+}
+
+/**
+ * @param {*} value
+ */
+function isStorableValue(value) {
+	const type = typeof value;
+	if (type === "number" || type === "string" || type === "boolean" || value === null) return true;
+	if (value === undefined || type === "function" || type === "symbol") return false;
+	if (type === "object") {
+		if (Array.isArray(value)) {
+			return false;//todo:数组
+			for (let i = 0; i < value.length; i++) {
+				const itemType = typeof value[i];
+				if (itemType !== "number" && itemType !== "string" && itemType !== "boolean" && value[i] !== null) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if (isPlainObject(value)) {
+			for (const subKey of Object.keys(value)) {
+				if (!isStorableValue(value[subKey])) return false;
+			}
+			return true;
+		}
+		return false;
+	}
+	return false;
+}
+
 class ProxyCacheEntry {
 	/**
 	 * @param {object} proxy 
@@ -11,6 +49,7 @@ class ProxyCacheEntry {
 	constructor(proxy, firstPath) {
 		this.proxy = proxy;
 		this.firstPath = firstPath;
+		Object.freeze(this);
 	}
 }
 
@@ -23,7 +62,7 @@ const registeredStorages = [];
 /**
  * @typedef {Object} DeepProxyHandler
  * @property {(target: Object, path: readonly string[], receiver: Object) => any} [get]
- * @property {(target: Object, path: readonly string[], value: any, receiver: Object) => boolean} [set]
+ * @property {(target: Object, path: readonly string[], value: any, receiver: Object|undefined) => boolean} [set]
  * @property {(target: Object, path: readonly string[]) => boolean} [deleteProperty]
  * @property {(target: Object, path: readonly string[]) => string[]} [ownKeys]
  * @property {(target: Object, path: readonly string[], prop: string | symbol) => PropertyDescriptor | undefined} [getOwnPropertyDescriptor]
@@ -33,6 +72,7 @@ const registeredStorages = [];
  * @param {DeepProxyHandler} handler
  * @param {readonly string[]} [currentPath=[]]
  * @returns {*}
+ * @todo 将路径检查移动
  */
 function createDeepProxy(target, handler, currentPath = []) {
 	const cacheEntry = deepProxyCache.get(target);
@@ -260,6 +300,7 @@ class FlatJSONStorage extends StorageInterface {
 		this.cache = new Map();
 		/**
 		 * @type {DeepProxyHandler}
+		 * @readonly
 		 */
 		this._handler = {
 			get: (target, path) => {
@@ -267,7 +308,12 @@ class FlatJSONStorage extends StorageInterface {
 				const key = path.join(".");
 				const schemaNode = this._getSchemaNode(path);
 				if (schemaNode && typeof schemaNode === "object") {
-					return createDeepProxy({}, this._handler, path);
+					let subTarget = this.cache.get(key);
+					if (!subTarget || typeof subTarget !== "object") {
+						subTarget = {};
+						this.cache.set(key, subTarget);
+					}
+					return createDeepProxy(subTarget, this.data.handler, path);
 				}
 				if (this.cache.has(key)) {
 					return this.cache.get(key);
@@ -279,11 +325,39 @@ class FlatJSONStorage extends StorageInterface {
 			},
 			set: (target, path, value) => {
 				const key = path.join(".");
-				this.cache.set(key, value);
-				this._createSchemaNode(path);
-				(async () => {
-					await this.adapter.set(key, value);
-				})().catch(console.error);
+				if (!isStorableValue(value)) {
+					throw new TypeError(
+						`[FlatJSONStorage] Invalid value at "${key}". Only plain objects, and arrays containing only numbers/strings/booleans/null are allowed.`
+					);
+				}
+				const oldSchemaNode = this._getSchemaNode(path);
+				const oldValue = this.cache.get(key);
+				if (oldSchemaNode !== undefined && typeof oldSchemaNode === "object") {
+					const prefix = key + ".";
+					const keysToDelete = [...this.cache.keys()].filter(k => k.startsWith(prefix));
+					keysToDelete.forEach(k => {
+						this.cache.delete(k);
+						(async () => { await this.adapter.delete(k); })().catch(console.error);
+					});
+				}
+				if (isPlainObject(value)) {
+					this.cache.set(key, value);
+					let node = this.schema;
+					for (let i = 0; i < path.length - 1; i++) {
+						if (!node[path[i]] || typeof node[path[i]] !== "object") node[path[i]] = {};
+						node = node[path[i]];
+					}
+					node[path[path.length - 1]] = {};
+					for (const subKey of Object.keys(value)) {
+						this._handler.set(target, [...path, subKey], value[subKey], undefined);
+					}
+					this._updateSchema().catch(console.error);
+				} else {
+					this.cache.set(key, value);
+					this._createSchemaNode(path);
+					(async () => { await this.adapter.set(key, value); })().catch(console.error);
+				}
+
 				return true;
 			},
 			deleteProperty: (target, path) => {
