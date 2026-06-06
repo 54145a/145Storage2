@@ -89,6 +89,7 @@ This project is under active development, but the current version is stable and 
 - [ ] Synchronous read flat storage
 - [ ] Unstorage backend adaptation
 - [ ] IndexedDB adaptation
+
 *(XML storage was planned but dropped. We are focusing on making JSON storage perfect!)*
 
 ## 🤝 Contributing
