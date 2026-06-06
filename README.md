@@ -35,7 +35,7 @@ settings.count += 1; // That's it!
 Best for small data that needs to be read/written all at once. Binds to a single Storage key.
 
 ```javascript
-import { WebStorageItemStorage } from "./storage.js";
+import { WebStorageItemStorage } from "@54145a/storage2/storage.js";
 // Create a reactive storage object in one line
 const settings = new WebStorageItemStorage("settings", localStorage).data;
 // 🪄 Modify directly, auto-persists!
@@ -49,7 +49,7 @@ console.info("Count:", settings.count);
 Best for large data where you need to update deep properties efficiently. It flattens nested objects into keys like `user.name` and `user.age`, saving only what changed.
 
 ```javascript
-import { FlatWebStorage } from "./storage.js";
+import { FlatWebStorage } from "@54145a/storage2/storage.js";
 const flatStorage = new FlatWebStorage({ 
     namespace: "myApp", 
     instance: localStorage 
