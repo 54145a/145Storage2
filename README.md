@@ -1,4 +1,4 @@
-# 📦 145 Storage 2: My KV is a **simple Object**
+# 📦 145 Storage 2: My KV is a **plain Object**
 
 > A lightweight, smart JavaScript storage library that makes state persistence as easy as modifying a plain object.
 
