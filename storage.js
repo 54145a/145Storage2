@@ -593,10 +593,10 @@ class FlatJSONStorage extends StorageInterface {
 	 * @param {string} key 
 	 */
 	async delete(key = "") {
+		this.assertReady();
 		const path = key === "" ? [] : key.split(".");
 		const node = this._getSchemaNode(path);
 		if (node === undefined) return;
-
 		const subKeys = this.getSubKeys(key);
 		for (const flatKey of subKeys) {
 			this.cache.delete(flatKey);
