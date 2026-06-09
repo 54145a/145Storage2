@@ -89,6 +89,7 @@ This project is under active development, but the current version is stable and 
 - [x] Smart debouncing for array operations
 - [x] Schema-based deep property traversal and loading
 - [ ] Synchronous read flat storage
+- [ ] Docs
 - [ ] Unstorage backend adaptation
 - [ ] IndexedDB adaptation
 

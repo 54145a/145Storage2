@@ -35,7 +35,7 @@ const registeredStorages = [];
 /** 
  * @see createDeepProxy 
  */
-class DeepProxyPenetrateResult {
+class DeepProxyWrapExempt {
 	/** 
 	 * @param {*} value 
 	 */
@@ -83,7 +83,7 @@ function createDeepProxy(target, handler, currentPath = []) {
 			const path = Object.freeze([...currentPath, prop.toString()]);
 			if (handler.get) {
 				const result = handler.get(obj, path, receiver);
-				if (result instanceof DeepProxyPenetrateResult) {
+				if (result instanceof DeepProxyWrapExempt) {
 					return result.value;
 				}
 				if (typeof result === "object" && result !== null && typeof result !== "function") {
@@ -181,10 +181,11 @@ class DebounceStorage extends StorageInterface {
 	 * @param {Exclude<any, undefined>} initialValue 
 	 * @param {(value: any)=>Promise<void>|void} updator 
 	 * @param {number} updateDelayMs 
+	 * @param {boolean} structuredCloneExempt Use raw initialValue as cache. DO NOT MODIFY THE OBJECT EVER IF YOU ENABLE THIS.
 	 */
-	constructor(initialValue, updator, updateDelayMs = 100) {
+	constructor(initialValue, updator, updateDelayMs = 100, structuredCloneExempt = false) {
 		super();
-		this._cache = structuredClone(initialValue);
+		this._cache = structuredCloneExempt ? initialValue : structuredClone(initialValue);
 		this.updator = updator;
 		this.updateDelayMs = updateDelayMs;
 	}
@@ -229,9 +230,10 @@ class JSONDebounceStorage extends DebounceStorage {
 	 * @param {object} initialValue 
 	 * @param {(value: Object)=>Promise<void>|void} updator 
 	 * @param {number=} updateDelayMs 
+	 * @param {boolean=} structuredCloneExempt
 	 */
-	constructor(initialValue, updator, updateDelayMs) {
-		super(initialValue, updator, updateDelayMs);
+	constructor(initialValue, updator, updateDelayMs, structuredCloneExempt) {
+		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
 		this._data = createDeepProxy(this._cache, {
 			set: (target, path, value, receiver) => {
 				this.requestUpdate();
@@ -406,7 +408,7 @@ class FlatJSONStorage extends StorageInterface {
 						throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
 					}
 					const debouncer = this._getArrayDebouncer(key);
-					return new DeepProxyPenetrateResult(debouncer._data);
+					return new DeepProxyWrapExempt(debouncer._data);
 				}
 
 				if (this.cache.has(key)) {
@@ -697,11 +699,12 @@ class FlatJSONStorage extends StorageInterface {
 				async (newVal) => {
 					this.cache.set(key, newVal);
 					await this.adapter.set(key, newVal);
-				}
+				},
+				undefined,
+				true
 			);
 			this.arrayDebouncers.set(key, debouncer);
-			//JSONDebounceStorage 内部会 structuredClone，必须把克隆后的引用刷回 FlatJSONStorage 的 cache 
-			this.cache.set(key, debouncer.cache);
+			//this.cache.set(key, debouncer.cache);
 		}
 		return debouncer;
 	}
