@@ -692,7 +692,10 @@ class FlatJSONStorage extends StorageInterface {
 		if (!debouncer) {
 			let arrTarget = initialArr || this.cache.get(key);
 			if (!Array.isArray(arrTarget)) {
-				arrTarget = [];
+				throw new TypeError(
+					`[FlatJSONStorage] Data corruption detected at "${key}". ` +
+					`Expected an array but got ${typeof arrTarget}. Schema and cache are out of sync.`
+				);
 			}
 			debouncer = new JSONDebounceStorage(
 				arrTarget,
