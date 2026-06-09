@@ -17,8 +17,8 @@ console.log("Everything in flat storage(old): ", JSON.stringify(flatLocalStorage
 flatLocalStorage.data.count = flatLocalStorage.data.count ? flatLocalStorage.data.count + 1 : 1;
 console.info("Flat count:", flatLocalStorage.data.count);
 
-flatLocalStorage.data.arrTest = flatLocalStorage.data.arrTest ?? [];
-flatLocalStorage.data.arrTest = ["I am a, no, an array!!!~"];
+flatLocalStorage.data.arrTest ??= [];
+flatLocalStorage.data.arrTest.push("I am a, no, an array!!!~");
 flatLocalStorage.data.arrTest[1] = `Time: ${Date.now()}`;
 
 console.log("Everything in flat storage: ", JSON.stringify(flatLocalStorage.data));
