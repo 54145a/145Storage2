@@ -59,8 +59,8 @@ const flatStorage = new FlatWebStorage({
 await flatStorage.init();
 await flatStorage.load(""); // Load everything under the root
 flatStorage.data.count = flatStorage.data.count ? flatStorage.data.count + 1 : 1;
-flatStorage.data.arrTest = flatStorage.data.arrTest ?? [];
-flatStorage.data.arrTest = ["I am an array!!!~"];
+flatStorage.data.arrTest ??= [];
+flatStorage.data.arrTest.push("I am an array!!!~");
 flatStorage.data.arrTest[1] = `Time: ${Date.now()}`; // Array mutations auto-save
 if ("count" in flatStorage.data) {
     console.log("Count exists!");
