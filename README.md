@@ -2,9 +2,9 @@
 
 > A lightweight, smart JavaScript storage library that makes state persistence as easy as modifying a plain object.
 
-## Why 145 Storage?
+## Why 145 Storage 2?
 
-Tired of writing this boilerplate?
+Tired of writing this? 🤮
 
 ```javascript
 const data = JSON.parse(localStorage.getItem("settings"));
@@ -12,10 +12,10 @@ data.count += 1;
 localStorage.setItem("settings", JSON.stringify(data));
 ```
 
-With my library, you just do this:
+But what if, WHAT IF, you can *just* do **this↓**
 
 ```javascript
-settings.count += 1; // That's it!
+settings.count += 1;
 ```
 
 ### Core Features
@@ -26,7 +26,9 @@ settings.count += 1; // That's it!
 - 🔒 **Type Safety**: Blocks un-storable values (like `undefined` or `function`) to keep your storage safe.
 - 🌐 **Framework Agnostic**: Works in any vanilla JS or framework environment.
 
----
+### The Story
+
+145 Storage 2 is originally built on top of the legacy 145 Storage, which is now deprecated (source available at Box3-Tools) was built for interacting with the Box3 game engine's builtin database interface. I've been working on the idea of elegant state persistence since soon after I knew JavaScript.
 
 ## 🚀 Quick Start
 
@@ -94,4 +96,4 @@ This project is under active development, but the current version is stable and 
 
 ## 🤝 Contributing
 
-Issues, PRs, and suggestions are super welcome! Let's make state persistence elegant together.
+Issues, PRs, and suggestions are super welcome! Let's make state persistence elegant, together!
