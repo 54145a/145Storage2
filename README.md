@@ -28,7 +28,7 @@ settings.count += 1;
 
 ### The Story
 
-145 Storage 2 is originally built on top of the legacy 145 Storage, which is now deprecated (source available at Box3-Tools) was built for interacting with the Box3 game engine's builtin database interface. I've been working on the idea of elegant state persistence since soon after I knew JavaScript.
+145 Storage 2 was originally built on top of the legacy 145 Storage (now deprecated; source available at Box3-Tools), which was designed to interact with the Box3 game engine's built-in database interface. I've been working on the idea of elegant state persistence since soon after I learned JavaScript.
 
 ## 🚀 Quick Start
 
