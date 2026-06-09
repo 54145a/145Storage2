@@ -406,15 +406,16 @@ class FlatJSONStorage extends StorageInterface {
 				}
 				const oldSchemaNode = this._getSchemaNode(path);
 				if (oldSchemaNode !== undefined && typeof oldSchemaNode === "object") {
-					if (Array.isArray(oldSchemaNode) && !Array.isArray(value)) {
-						this._abortArrayDebouncer(key);
+					if (Array.isArray(oldSchemaNode) && Array.isArray(value)) {
+						// Preserve the existing debounced array instance; it'll be updated via splice below.
+					} else {
+						const keysToDelete = this.getSubKeys(key);
+						for (const k of keysToDelete) {
+							this._abortArrayDebouncer(k);
+							this.cache.delete(k);
+							(async () => { await this.adapter.delete(k); })().catch(console.error);
+						}
 					}
-					const prefix = key + ".";
-					const keysToDelete = [...this.cache.keys()].filter(k => k.startsWith(prefix));
-					keysToDelete.forEach(k => {
-						this.cache.delete(k);
-						(async () => { await this.adapter.delete(k); })().catch(console.error);
-					});
 				}
 				if (isPlainObject(value)) {
 					this.cache.set(key, {});
@@ -567,10 +568,10 @@ class FlatJSONStorage extends StorageInterface {
 	 * @param {string} key 
 	 */
 	async load(key = "") {
+		this.assertReady();
 		const path = key === "" ? [] : key.split(".");
 		const node = this._getSchemaNode(path);
 		if (node === undefined) return;
-
 		const subKeys = this.getSubKeys(key);
 		for (const flatKey of subKeys) {
 			if (!this.cache.has(flatKey)) {
@@ -593,10 +594,10 @@ class FlatJSONStorage extends StorageInterface {
 	 * @param {string} key 
 	 */
 	async delete(key = "") {
+		this.assertReady();
 		const path = key === "" ? [] : key.split(".");
 		const node = this._getSchemaNode(path);
 		if (node === undefined) return;
-
 		const subKeys = this.getSubKeys(key);
 		for (const flatKey of subKeys) {
 			this.cache.delete(flatKey);
