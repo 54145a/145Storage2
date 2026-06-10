@@ -225,17 +225,61 @@ class DebounceStorage extends StorageInterface {
 	}
 }
 
+/**
+ * @param {*} value
+ * @returns {boolean}
+ */
+function isJSONValue(value) {
+	if (value === null) return true;
+	switch (typeof value) {
+		case "string":
+			return true;
+		case "boolean":
+			return true;
+		case "number": return isFinite(value);
+		case "object":
+			if (Array.isArray(value)) {
+				return value.every(item => isJSONValue(item));
+			}
+			if (isPlainObject(value)) {
+				return Object.values(value).every(v => isJSONValue(v));
+			}
+			return false;
+	}
+	return false;
+}
+
+/**
+ * @param {*} value 
+ */
+function isJSONStorageStorableValue(value) {
+	return isJSONValue(value);
+}
+
+/**
+ * @param {*} value
+ */
+function assertIsJSONStorageStorableValue(value) {
+	if (!isJSONStorageStorableValue(value)) {
+		console.error("Value is not JSON-storable:", value);
+		throw new TypeError("Value is not JSON-storable.");
+	}
+}
 class JSONDebounceStorage extends DebounceStorage {
 	/** 
-	 * @param {object} initialValue 
-	 * @param {(value: Object)=>Promise<void>|void} updator 
-	 * @param {number=} updateDelayMs 
+	 * @param {object} initialValue
+	 * @param {(value: Object)=>Promise<void>|void} updator
+	 * @param {number=} updateDelayMs
 	 * @param {boolean=} structuredCloneExempt
+	 * @param {(value: Object, path: readonly string[])=>void=} onSet
+	 * @todo 更改此函数参数
 	 */
-	constructor(initialValue, updator, updateDelayMs, structuredCloneExempt) {
+	constructor(initialValue, updator, updateDelayMs, structuredCloneExempt, onSet = () => { }) {
 		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
 		this._data = createDeepProxy(this._cache, {
 			set: (target, path, value, receiver) => {
+				assertIsJSONStorageStorableValue(value);
+				onSet(value, path);
 				this.requestUpdate();
 				const prop = path[path.length - 1];
 				return Reflect.set(target, prop, value, Array.isArray(target) ? target : receiver);
@@ -282,9 +326,9 @@ class JSONStorageAdaptor {
 		this.updater = updater;
 	}
 };
-//#endregion 
-//#region 
-/** 
+//#endregion
+//#region
+/**
  * @param {*} value 
  */
 function isPlainObject(value) {
@@ -293,37 +337,11 @@ function isPlainObject(value) {
 	return proto === Object.prototype || proto === null;
 }
 
-/** 
- * @param {*} value 
- */
-function isFlatStorageStorableValue(value) {
-	const type = typeof value;
-	if (type === "number" || type === "string" || type === "boolean" || value === null) return true;
-	if (value === undefined || type === "function" || type === "symbol") return false;
-	if (type === "object") {
-		if (Array.isArray(value)) {
-			for (let i = 0; i < value.length; i++) {
-				const itemType = typeof value[i];
-				if (itemType !== "number" && itemType !== "string" && itemType !== "boolean" && value[i] !== null) {
-					return false;
-				}
-			}
-			return true;
-		}
-		if (isPlainObject(value)) {
-			for (const subKey of Object.keys(value)) {
-				if (!isFlatStorageStorableValue(value[subKey])) return false;
-			}
-			return true;
-		}
-		return false;
-	}
-	return false;
-}
 
 const SCHEMA_KEY = "__145Storage__flatSchema__";
 
-/** @typedef {object} FlatStorageAdapter 
+/**
+ * @typedef {object} FlatStorageAdapter 
  * @property {(key: string) => Promise<any> | any} get 
  * @property {(key: string, value: any) => Promise<void> | void} set 
  * @property {(key: string) => Promise<void> | void} delete 
@@ -421,11 +439,11 @@ class FlatJSONStorage extends StorageInterface {
 			},
 			set: (target, path, value) => {
 				const key = path.join(".");
-
+				assertIsJSONStorageStorableValue(value);
 				if (typeof value === "object" && value !== null) {
 					if (!Array.isArray(value) && !isPlainObject(value)) {
 						throw new TypeError(
-							`[FlatJSONStorage] Invalid value at "${key}". Only plain objects and arrays are allowed.`
+							`[FlatJSONStorage] Invalid value at "${key}". Only plain objects and arrays with primitive types are allowed.`
 						);
 					}
 					try {
@@ -434,7 +452,7 @@ class FlatJSONStorage extends StorageInterface {
 						throw new TypeError(`[FlatJSONStorage] Failed to serialize value at "${key}".`);
 					}
 				}
-				if (!isFlatStorageStorableValue(value)) {
+				if (!isJSONStorageStorableValue(value)) {
 					throw new TypeError(
 						`[FlatJSONStorage] Invalid value at "${key}". Only plain objects, and arrays containing only numbers/strings/booleans/null are allowed.`
 					);
@@ -693,8 +711,7 @@ class FlatJSONStorage extends StorageInterface {
 			let arrTarget = initialArr || this.cache.get(key);
 			if (!Array.isArray(arrTarget)) {
 				throw new TypeError(
-					`[FlatJSONStorage] Data corruption detected at "${key}". ` +
-					`Expected an array but got ${typeof arrTarget}. Schema and cache are out of sync.`
+					`[FlatJSONStorage] Expected an array but got ${typeof arrTarget} at "${key}". Schema and cache are out of sync.`
 				);
 			}
 			debouncer = new JSONDebounceStorage(
@@ -704,14 +721,23 @@ class FlatJSONStorage extends StorageInterface {
 					await this.adapter.set(key, newVal);
 				},
 				undefined,
-				true
+				true, // structuredCloneExempt
+				(value, path) => {
+					if (typeof value === "object" && value !== null) {
+						throw new TypeError(
+							`[FlatJSONStorage] Arrays can only contain primitive values. ` +
+							`Invalid value at path "${key}.${path.join(".")}"`
+						);
+					}
+				}
 			);
 			this.arrayDebouncers.set(key, debouncer);
-			//this.cache.set(key, debouncer.cache);
+			if (!this.cache.has(key)) {
+				this.cache.set(key, debouncer.cache);
+			}
 		}
 		return debouncer;
 	}
-
 	/** 
 	 * @param {string} key 
 	 */
