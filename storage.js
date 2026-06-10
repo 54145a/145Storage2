@@ -258,11 +258,27 @@ function isJSONStorageStorableValue(value) {
 
 /**
  * @param {*} value
+ * @param {...*} info
  */
-function assertIsJSONStorageStorableValue(value) {
+function assertIsJSONStorageStorableValue(value, ...info) {
 	if (!isJSONStorageStorableValue(value)) {
-		console.error("Value is not JSON-storable:", value);
-		throw new TypeError("Value is not JSON-storable.");
+		console.error("Value is not JSON-storable:", value, ...info);
+		throw new TypeError("Value not JSON-storable.");
+	}
+}
+
+/**
+ * @param {*} array
+ * @param {...*} info
+ */
+function assertIsFlatJSONStorageStorableArray(array, ...info) {
+	for (const item of array) {
+		if (item === null) continue;
+		const type = typeof item;
+		if (type === 'number' && isFinite(item)) continue;
+		if (type === 'string' || type === 'boolean') continue;
+		console.error("[FlatJSONStorage] Array contains non-primitive value:", item, ...info);
+		throw new TypeError("Non-primitive array.");
 	}
 }
 class JSONDebounceStorage extends DebounceStorage {
@@ -439,23 +455,18 @@ class FlatJSONStorage extends StorageInterface {
 			},
 			set: (target, path, value) => {
 				const key = path.join(".");
-				assertIsJSONStorageStorableValue(value);
+				assertIsJSONStorageStorableValue(value, "flat path:", path);
 				if (typeof value === "object" && value !== null) {
-					if (!Array.isArray(value) && !isPlainObject(value)) {
+					/*if (!Array.isArray(value) && !isPlainObject(value)) {
 						throw new TypeError(
 							`[FlatJSONStorage] Invalid value at "${key}". Only plain objects and arrays with primitive types are allowed.`
 						);
-					}
+					}*/
 					try {
 						value = StorageInterface.getRaw(value);
 					} catch (e) {
 						throw new TypeError(`[FlatJSONStorage] Failed to serialize value at "${key}".`);
 					}
-				}
-				if (!isJSONStorageStorableValue(value)) {
-					throw new TypeError(
-						`[FlatJSONStorage] Invalid value at "${key}". Only plain objects, and arrays containing only numbers/strings/booleans/null are allowed.`
-					);
 				}
 
 				const oldSchemaNode = this._getSchemaNode(path);
@@ -488,6 +499,7 @@ class FlatJSONStorage extends StorageInterface {
 						this._handler.set(target, [...path, subKey], value[subKey], undefined);
 					}
 				} else if (newNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+					assertIsFlatJSONStorageStorableArray(value, "at path:", path);
 					const debouncer = this._getArrayDebouncer(key, value);
 					debouncer._data.splice(0, debouncer._data.length, ...value);
 				} else {
@@ -721,14 +733,9 @@ class FlatJSONStorage extends StorageInterface {
 					await this.adapter.set(key, newVal);
 				},
 				undefined,
-				true, // structuredCloneExempt
+				true,
 				(value, path) => {
-					if (typeof value === "object" && value !== null) {
-						throw new TypeError(
-							`[FlatJSONStorage] Arrays can only contain primitive values. ` +
-							`Invalid value at path "${key}.${path.join(".")}"`
-						);
-					}
+					assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
 				}
 			);
 			this.arrayDebouncers.set(key, debouncer);
