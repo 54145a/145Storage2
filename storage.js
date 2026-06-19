@@ -536,7 +536,8 @@ class FlatJSONStorage extends StorageInterface {
 				return [];
 			},
 			getOwnPropertyDescriptor: (target, path, prop) => {
-				const schemaNode = this._getSchemaNode(path);
+				const fullPath = [...path, prop.toString()];
+				const schemaNode = this._getSchemaNode(fullPath);
 				if (schemaNode !== undefined) {
 					return { configurable: true, enumerable: true, writable: true, value: undefined };
 				}
@@ -652,6 +653,7 @@ class FlatJSONStorage extends StorageInterface {
 
 	/**
 	 * @param {string} [key=""]
+	 * @todo 去重
 	 */
 	load(key = "") {
 		this.assertReady();
@@ -751,9 +753,12 @@ class FlatJSONStorage extends StorageInterface {
 	async get(strings, ...keys) {
 		let path = strings[0];
 		keys.forEach((k, i) => path += k + strings[i + 1]);
-		return this.load(path);
+		const result = await this.load(path);
+		if (result instanceof DeepProxyWrapExempt) {
+			return result.value;
+		}
+		return result;
 	}
-
 
 	/** @deprecated */
 	getSchema() {
