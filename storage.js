@@ -4,14 +4,16 @@
  * @license AGPL-3.0
  */
 
+
 class ProxyCacheEntry {
-	/**
+	/** 
 	 * @param {object} proxy 
 	 * @param {readonly string[]} firstPath 
 	 */
 	constructor(proxy, firstPath) {
 		this.proxy = proxy;
 		this.firstPath = firstPath;
+		Object.freeze(this);
 	}
 }
 
@@ -21,17 +23,34 @@ const deepProxyCache = new WeakMap();
 /** @type { WeakRef<StorageInterface>[] } */
 const registeredStorages = [];
 
-/**
- * @typedef {Object} DeepProxyHandler
- * @property {(target: Object, path: readonly string[], receiver: Object) => any} [get]
- * @property {(target: Object, path: readonly string[], value: any, receiver: Object) => boolean} [set]
- * @property {(target: Object, path: readonly string[]) => boolean} [deleteProperty]
+/** 
+ * @typedef {object} DeepProxyHandler 
+ * @property {(target: Object, path: readonly string[]) => boolean} [has] 
+ * @property {(target: Object, path: readonly string[], receiver: Object) => any} [get] 
+ * @property {(target: Object, path: readonly string[], value: any, receiver: Object|undefined) => boolean} [set] 
+ * @property {(target: Object, path: readonly string[]) => boolean} [deleteProperty] 
+ * @property {(target: Object, path: readonly string[]) => string[]} [ownKeys] 
+ * @property {(target: Object, path: readonly string[], prop: string | symbol) => PropertyDescriptor | undefined} [getOwnPropertyDescriptor] 
  */
-/**
- * @param {object} target
- * @param {DeepProxyHandler} handler
- * @param {readonly string[]} [currentPath=[]]
- * @returns {*}
+
+/** 
+ * @see createDeepProxy 
+ */
+class DeepProxyWrapExempt {
+	/** 
+	 * @param {*} value 
+	 */
+	constructor(value) {
+		this.value = value;
+	}
+}
+
+/** 
+ * @param {object} target 
+ * @param {DeepProxyHandler} handler 
+ * @param {readonly string[]} [currentPath=[]] 
+ * @returns {*} 
+ * @todo 将路径检查移动 
  */
 function createDeepProxy(target, handler, currentPath = []) {
 	const cacheEntry = deepProxyCache.get(target);
@@ -45,18 +64,29 @@ function createDeepProxy(target, handler, currentPath = []) {
 		}
 		return cacheEntry.proxy;
 	}
-	/**
+	/** 
 	 * @param {keyof any} prop 
 	 */
 	const assertSymbol = prop => {
 		console.assert(typeof prop !== "symbol", "Symbol properties are not supported by createDeepProxy.");
 	};
 	const proxy = new Proxy(target, {
+		has(target, prop) {
+			assertSymbol(prop);
+			const path = [...currentPath, String(prop)];
+			if (handler.has) {
+				return handler.has(target, path);
+			}
+			return Reflect.has(target, prop);
+		},
 		get(obj, prop, receiver) {
 			assertSymbol(prop);
 			const path = Object.freeze([...currentPath, prop.toString()]);
 			if (handler.get) {
 				const result = handler.get(obj, path, receiver);
+				if (result instanceof DeepProxyWrapExempt) {
+					return result.value;
+				}
 				if (typeof result === "object" && result !== null && typeof result !== "function") {
 					return createDeepProxy(result, handler, path);
 				}
@@ -83,12 +113,40 @@ function createDeepProxy(target, handler, currentPath = []) {
 				return handler.deleteProperty(obj, path);
 			}
 			return Reflect.deleteProperty(obj, prop);
+		},
+		ownKeys(target) {
+			if (handler.ownKeys) {
+				return handler.ownKeys(target, currentPath);
+			}
+			return Reflect.ownKeys(target);
+		},
+		getOwnPropertyDescriptor(target, prop) {
+			assertSymbol(prop);
+			const path = [...currentPath, prop.toString()];
+			if (handler.getOwnPropertyDescriptor) {
+				return handler.getOwnPropertyDescriptor(target, path, prop);
+			}
+			return Reflect.getOwnPropertyDescriptor(target, prop);
 		}
 	});
 	deepProxyCache.set(target, new ProxyCacheEntry(proxy, currentPath));
 	return proxy;
 }
+
 class StorageInterface {
+	/** 
+	 * @param {*} observed 
+	 * @returns {*} 
+	 */
+	static getRaw(observed) {
+		if (typeof observed !== 'object' || observed === null) return observed;
+		try {
+			return JSON.parse(JSON.stringify(observed));
+		} catch (e) {
+			console.error("[StorageInterface] Failed to get raw value. Possibly unloaded keys or non-serializable data.", e);
+			throw e;
+		}
+	}
 	constructor() {
 		const proto = Object.getPrototypeOf(this);
 		for (const key of Object.getOwnPropertyNames(proto)) {
@@ -106,7 +164,10 @@ class StorageInterface {
 		if (!this.isReady) throw new Error("Storage not ready. Call .init() first.");
 	}
 	/** @type {any} */
-	data;
+	_data;
+	get data() {
+		return this._data;
+	}
 	/** @type {number|undefined} */
 	updateTimerID;
 	async update() {
@@ -114,16 +175,18 @@ class StorageInterface {
 		this.scheduledUpdate = false;
 	}
 }
+
 //#region 
 class DebounceStorage extends StorageInterface {
-	/**
-	 * @param {any} initialValue 
-	 * @param {(value: any)=>Promise<void>|void} updator
-	 * @param {number} updateDelayMs  
+	/** 
+	 * @param {Exclude<any, undefined>} initialValue 
+	 * @param {(value: any)=>Promise<void>|void} updator 
+	 * @param {number} updateDelayMs 
+	 * @param {boolean} structuredCloneExempt Use raw initialValue as cache. DO NOT MODIFY THE OBJECT EVER IF YOU ENABLE THIS.
 	 */
-	constructor(initialValue, updator, updateDelayMs = 100) {
+	constructor(initialValue, updator, updateDelayMs = 100, structuredCloneExempt = false) {
 		super();
-		Object.assign(this.cache, initialValue);
+		this._cache = structuredCloneExempt ? initialValue : structuredClone(initialValue);
 		this.updator = updator;
 		this.updateDelayMs = updateDelayMs;
 	}
@@ -132,11 +195,21 @@ class DebounceStorage extends StorageInterface {
 		this.isReady = true;
 	};
 	/** @protected */
-	cache = {};
+	_cache = {};
+	get cache() {
+		return this._cache;
+	}
 	scheduledUpdate = false;
+	abort() {
+		if (this.updateTimerID) {
+			clearTimeout(this.updateTimerID);
+			this.updateTimerID = undefined;
+		}
+		this.scheduledUpdate = false;
+	}
 	async update() {
 		super.update();
-		await this.updator(this.cache);
+		await this.updator(this._cache);
 	}
 	requestUpdate() {
 		this.assertReady();
@@ -152,19 +225,81 @@ class DebounceStorage extends StorageInterface {
 		}
 	}
 }
+
+/**
+ * @param {*} value
+ * @returns {boolean}
+ */
+function isJSONValue(value) {
+	if (value === null) return true;
+	switch (typeof value) {
+		case "string":
+			return true;
+		case "boolean":
+			return true;
+		case "number": return isFinite(value);
+		case "object":
+			if (Array.isArray(value)) {
+				return value.every(item => isJSONValue(item));
+			}
+			if (isPlainObject(value)) {
+				return Object.values(value).every(v => isJSONValue(v));
+			}
+			return false;
+	}
+	return false;
+}
+
+/**
+ * @param {*} value 
+ */
+function isJSONStorageStorableValue(value) {
+	return isJSONValue(value);
+}
+
+/**
+ * @param {*} value
+ * @param {...*} info
+ */
+function assertIsJSONStorageStorableValue(value, ...info) {
+	if (!isJSONStorageStorableValue(value)) {
+		console.error("Value is not JSON-storable:", value, ...info);
+		throw new TypeError("Value not JSON-storable.");
+	}
+}
+
+/**
+ * @param {*} array
+ * @param {...*} info
+ */
+function assertIsFlatJSONStorageStorableArray(array, ...info) {
+	for (const item of array) {
+		if (item === null) continue;
+		const type = typeof item;
+		if (type === 'number' && isFinite(item)) continue;
+		if (type === 'string' || type === 'boolean') continue;
+		console.error("[FlatJSONStorage] Array contains non-primitive value:", item, ...info);
+		throw new TypeError("Non-primitive array.");
+	}
+}
 class JSONDebounceStorage extends DebounceStorage {
-	/**
-	 * @param {Object} initialValue 
+	/** 
+	 * @param {object} initialValue
 	 * @param {(value: Object)=>Promise<void>|void} updator
-	 * @param {number=} updateDelayMs  
+	 * @param {number=} updateDelayMs
+	 * @param {boolean=} structuredCloneExempt
+	 * @param {(value: Object, path: readonly string[])=>void=} onSet
+	 * @todo 更改此函数参数
 	 */
-	constructor(initialValue, updator, updateDelayMs) {
-		super(initialValue, updator, updateDelayMs);
-		this.data = createDeepProxy(this.cache, {
+	constructor(initialValue, updator, updateDelayMs, structuredCloneExempt, onSet = () => { }) {
+		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
+		this._data = createDeepProxy(this._cache, {
 			set: (target, path, value, receiver) => {
+				assertIsJSONStorageStorableValue(value);
+				onSet(value, path);
 				this.requestUpdate();
 				const prop = path[path.length - 1];
-				return Reflect.set(target, prop, value, receiver);
+				return Reflect.set(target, prop, value, Array.isArray(target) ? target : receiver);
 			},
 			deleteProperty: (target, path) => {
 				this.requestUpdate();
@@ -175,13 +310,14 @@ class JSONDebounceStorage extends DebounceStorage {
 		this.init();
 	}
 	/** @type {ReturnType<createDeepProxy>} */
-	data;
+	_data;
 }
+
 class WebStorageItemStorage extends JSONDebounceStorage {
-	/**
-	 * @param {string} itemName
+	/** 
+	 * @param {string} itemName 
 	 * @param {Storage} instance 
-	 * @param {number=} updateDelayMs
+	 * @param {number=} updateDelayMs 
 	 */
 	constructor(itemName, instance, updateDelayMs) {
 		const existingData = instance.getItem(itemName);
@@ -194,10 +330,11 @@ class WebStorageItemStorage extends JSONDebounceStorage {
 		super(initialValue, value => instance.setItem(itemName, JSON.stringify(value)), updateDelayMs);
 	}
 }
+
 /** @deprecated */
 class JSONStorageAdaptor {
-	/**
-	 * @typedef {(name: string, data: Object)=>void} StorageUpdater
+	/** 
+	 * @typedef {(name: string, data: Object)=>void} StorageUpdater 
 	 * @param {(name: string)=>Promise<Object>|Object} initialValueGetter 
 	 * @param {StorageUpdater} updater 
 	 */
@@ -206,30 +343,61 @@ class JSONStorageAdaptor {
 		this.updater = updater;
 	}
 };
-
 //#endregion
+//#region
+/**
+ * @param {*} value 
+ */
+function isPlainObject(value) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const proto = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
+}
+
 
 const SCHEMA_KEY = "__145Storage__flatSchema__";
 
-/** @typedef {Object} FlatStorageAdapter
- * @property {(key: string) => Promise<any> | any} get
- * @property {(key: string, value: any) => Promise<void> | void} set
- * @property {(key: string) => Promise<void> | void} delete
+/**
+ * @typedef {object} FlatStorageAdapter 
+ * @property {(key: string) => Promise<any> | any} get 
+ * @property {(key: string, value: any) => Promise<void> | void} set 
+ * @property {(key: string) => Promise<void> | void} delete 
  */
 
+/**
+ * @enum {string}
+ */
+const FlatSchemaValueType = {
+	PRIMITIVE: "0",
+	FLAT_LINK: "{}",
+	DEBOUNCE_ARRAY: "[]"
+};
+
+/**
+ * @param {*} node
+ * @returns {FlatSchemaValueType|undefined} 
+ */
+function getSchemaNodeValueType(node) {
+	if (node === undefined || node === null) return undefined;
+	if (isPlainObject(node)) return FlatSchemaValueType.FLAT_LINK;
+	if (Array.isArray(node)) return FlatSchemaValueType.DEBOUNCE_ARRAY;
+	// Fallback for primitive markers (currently number 0)
+	return FlatSchemaValueType.PRIMITIVE;
+}
+
 class FlatJSONStorage extends StorageInterface {
-	/**
-	 * @param {FlatStorageAdapter} adapter
-	 * @param {Object} [options]
-	 * @param {string} [options.namespace]
+	/** 
+	 * @param {FlatStorageAdapter} adapter 
+	 * @param {object} [options] 
+	 * @param {string} [options.namespace] 
 	 */
 	constructor(adapter, options = {}) {
 		super();
 		const { namespace } = options;
 		if (namespace) {
 			const rawAdapter = adapter;
-			/**
-			 * @type {FlatStorageAdapter}
+			/** 
+			 * @type {FlatStorageAdapter} 
 			 */
 			this.adapter = {
 				get: (key) => rawAdapter.get(`${namespace}:${key}`),
@@ -243,43 +411,143 @@ class FlatJSONStorage extends StorageInterface {
 		this.schema = {};
 		/** @type {Map<string, any>} */
 		this.cache = new Map();
-		/** @type {any} */
-		this.data = createDeepProxy({}, {
+		/** @type {Map<string, JSONDebounceStorage>} */
+		this.arrayDebouncers = new Map();
+
+		/** 
+		 * @type {DeepProxyHandler & { set: NonNullable<DeepProxyHandler["set"]>}} 
+		 * @readonly 
+		 */
+		this._handler = {
+			has: (target, path) => {
+				const schemaNode = this._getSchemaNode(path);
+				return schemaNode !== undefined;
+			},
 			get: (target, path) => {
 				this.assertReady();
 				const key = path.join(".");
 				const schemaNode = this._getSchemaNode(path);
-				if (schemaNode && typeof schemaNode === "object") {
-					return createDeepProxy({}, this.data.handler, path);
+				const nodeType = getSchemaNodeValueType(schemaNode);
+				if (nodeType === FlatSchemaValueType.FLAT_LINK) {
+					let subTarget = this.cache.get(key);
+					if (!subTarget || typeof subTarget !== "object") {
+						subTarget = {};
+						this.cache.set(key, subTarget);
+					}
+					return subTarget;
+				}
+				if (nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+					if (!this.cache.has(key) && !this.arrayDebouncers.has(key)) {
+						const loadResult = this.load(key);
+						if (loadResult instanceof Promise) {
+							throw new Error(`[FlatJSONStorage] Key not loaded (async adapter requires 'await load()'): "${key}".`);
+						}
+					}
+					const debouncer = this._getArrayDebouncer(key);
+					return new DeepProxyWrapExempt(debouncer._data);
 				}
 				if (this.cache.has(key)) {
 					return this.cache.get(key);
 				}
-				throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
+				if (nodeType === undefined) {
+					return undefined;
+				}
+
+				const loadResult = this.load(key);
+				if (loadResult instanceof Promise) {
+					throw new Error(`[FlatJSONStorage] Key not loaded (async adapter requires 'await load()'): "${key}".`);
+				}
+				return this.cache.get(key);
 			},
 			set: (target, path, value) => {
 				const key = path.join(".");
-				this.cache.set(key, value);
-				this._createSchemaNode(path);
-				(async () => {
-					await this.adapter.set(key, value);
-				})().catch(console.error);
+				assertIsJSONStorageStorableValue(value, "flat path:", path);
+				if (typeof value === "object" && value !== null) {
+					/*if (!Array.isArray(value) && !isPlainObject(value)) {
+						throw new TypeError(
+							`[FlatJSONStorage] Invalid value at "${key}". Only plain objects and arrays with primitive types are allowed.`
+						);
+					}*/
+					try {
+						value = StorageInterface.getRaw(value);
+					} catch (e) {
+						throw new TypeError(`[FlatJSONStorage] Failed to serialize value at "${key}".`);
+					}
+				}
+
+				const oldSchemaNode = this._getSchemaNode(path);
+				const oldNodeType = getSchemaNodeValueType(oldSchemaNode);
+				/** @type FlatSchemaValueType */
+				let newNodeType;
+				if (isPlainObject(value)) newNodeType = FlatSchemaValueType.FLAT_LINK;
+				else if (Array.isArray(value)) newNodeType = FlatSchemaValueType.DEBOUNCE_ARRAY;
+				else newNodeType = FlatSchemaValueType.PRIMITIVE;
+				const isOldBranch = oldNodeType === FlatSchemaValueType.FLAT_LINK || oldNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY;
+				if (isOldBranch && !(oldNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY && newNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY)) {
+					this._clearCache(path).catch(console.error);
+				}
+
+				let schemaTypeMarker;
+				if (newNodeType === FlatSchemaValueType.FLAT_LINK) schemaTypeMarker = {};
+				else if (newNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) schemaTypeMarker = [];
+				else schemaTypeMarker = 0; // PRIMITIVE
+				let node = this.schema;
+				for (let i = 0; i < path.length - 1; i++) {
+					if (!node[path[i]] || typeof node[path[i]] !== "object") node[path[i]] = {};
+					node = node[path[i]];
+				}
+				node[path[path.length - 1]] = schemaTypeMarker;
+				this._updateSchema().catch(console.error);
+
+				if (newNodeType === FlatSchemaValueType.FLAT_LINK) {
+					this.cache.set(key, {});
+					for (const subKey of Object.keys(value)) {
+						this._handler.set(target, [...path, subKey], value[subKey], undefined);
+					}
+				} else if (newNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+					assertIsFlatJSONStorageStorableArray(value, "at path:", path);
+					const debouncer = this._getArrayDebouncer(key, value);
+					debouncer._data.splice(0, debouncer._data.length, ...value);
+				} else {
+					this.cache.set(key, value);
+					(async () => { await this.adapter.set(key, value); })().catch(console.error);
+				}
+
 				return true;
 			},
 			deleteProperty: (target, path) => {
 				const key = path.join(".");
 				const schemaNode = this._getSchemaNode(path);
-				if (schemaNode && typeof schemaNode === "object") {
-					const prefix = key + ".";
-					const keysToDelete = [...this.cache.keys()].filter(k => k.startsWith(prefix));
-					keysToDelete.forEach(k => this.delete(k));
+				const nodeType = getSchemaNodeValueType(schemaNode);
+
+				if (nodeType === FlatSchemaValueType.FLAT_LINK || nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+					this._clearCache(path).catch(console.error);
 				}
-				this.delete(key);
+
+				this.cache.delete(key);
+				(async () => { await this.adapter.delete(key); })().catch(console.error);
 				this._deleteSchemaNode(path);
 				return true;
+			},
+			ownKeys: (target, path) => {
+				const schemaNode = this._getSchemaNode(path);
+				if (schemaNode && typeof schemaNode === "object") {
+					return Object.keys(schemaNode);
+				}
+				return [];
+			},
+			getOwnPropertyDescriptor: (target, path, prop) => {
+				const fullPath = [...path, prop.toString()];
+				const schemaNode = this._getSchemaNode(fullPath);
+				if (schemaNode !== undefined) {
+					return { configurable: true, enumerable: true, writable: true, value: undefined };
+				}
+				return undefined;
 			}
-		}, []);
+		}
+		this._data = createDeepProxy({}, this._handler);
 	}
+
 	/** @override */
 	async init() {
 		const storedSchema = await this.adapter.get(SCHEMA_KEY);
@@ -291,21 +559,88 @@ class FlatJSONStorage extends StorageInterface {
 		}
 		this.isReady = true;
 	}
+
+	/** 
+	 * @param {*} node 
+	 * @returns {boolean} 
+	 */
+	_isLeafNode(node) {
+		const type = getSchemaNodeValueType(node);
+		return type === FlatSchemaValueType.PRIMITIVE || type === FlatSchemaValueType.DEBOUNCE_ARRAY;
+	}
+
+	/**
+	 * @param {readonly string[]} path
+	 */
+	async _clearCache(path) {
+		const key = path.join(".");
+		const node = this._getSchemaNode(path);
+		const nodeType = getSchemaNodeValueType(node);
+		if (nodeType === undefined) return;
+
+		if (nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+			this._abortArrayDebouncer(key);
+		}
+
+		const subKeys = this.getSubKeys(key);
+		/** @type {Promise<void>[]} */
+		const deletePromises = [];
+
+		for (const k of subKeys) {
+			this.cache.delete(k);
+
+			const p = (async () => await this.adapter.delete(k))().catch(console.error);
+			deletePromises.push(p);
+
+			const flatPath = k.split(".");
+			const flatNode = this._getSchemaNode(flatPath);
+			if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+				this._abortArrayDebouncer(k);
+			}
+		}
+
+		await Promise.all(deletePromises);
+	}
+
+	/** 
+	 * @param {string} [key=""] 
+	 * @returns {string[]} 
+	 */
+	getSubKeys(key = "") {
+		const path = key === "" ? [] : key.split(".");
+		const node = this._getSchemaNode(path);
+		if (node === undefined) return [];
+		if (this._isLeafNode(node)) {
+			return [key];
+		}
+		/** @type {string[]} */
+		const keys = [];
+		/** 
+		 * @param {{[k: string]: any}} currentNode 
+		 * @param {string[]} currentPath 
+		 */
+		const traverseSchema = (currentNode, currentPath) => {
+			for (const subKey of Object.keys(currentNode)) {
+				const childPath = [...currentPath, subKey];
+				const childNode = currentNode[subKey];
+				if (this._isLeafNode(childNode)) {
+					keys.push(childPath.join("."));
+				} else {
+					traverseSchema(childNode, childPath);
+				}
+			}
+		};
+		traverseSchema(node, path);
+		return keys;
+	};
+
 	async _updateSchema() {
 		await this.adapter.set(SCHEMA_KEY, this.schema);
 	}
-	/** @param {readonly string[]} path */
-	_createSchemaNode(path) {
-		let node = this.schema;
-		for (let i = 0; i < path.length - 1; i++) {
-			const key = path[i];
-			if (!node[key] || typeof node[key] !== "object") node[key] = {};
-			node = node[key];
-		}
-		node[path[path.length - 1]] = 0;
-		this._updateSchema().catch(console.error);
-	}
-	/** @param {readonly string[]} path */
+
+	/**
+	 * @param {readonly string[]} path
+	 */
 	_deleteSchemaNode(path) {
 		if (path.length === 0) return;
 		let node = this.schema;
@@ -316,17 +651,92 @@ class FlatJSONStorage extends StorageInterface {
 		delete node[path[path.length - 1]];
 		this._updateSchema().catch(console.error);
 	}
-	/** @param {string} key */
-	async load(key) {
-		const value = await this.adapter.get(key);
-		this.cache.set(key, value);
-		return value;
+
+	/**
+	 * @param {string} [key=""]
+	 * @todo 去重
+	 */
+	load(key = "") {
+		this.assertReady();
+		const path = key === "" ? [] : key.split(".");
+		const node = this._getSchemaNode(path);
+		if (node === undefined) return undefined;
+
+		const nodeType = getSchemaNodeValueType(node);
+
+		const subKeys = this.getSubKeys(key);
+		/** @type {Promise<void>[]} */
+		const promises = [];
+		/**
+		 * @param {string} flatKey
+		 * @param {any} value
+		 */
+		const handleGetHandlerResult = (flatKey, value) => {
+			this.cache.set(flatKey, value);
+			const flatPath = flatKey.split(".");
+			const flatNode = this._getSchemaNode(flatPath);
+			if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+				this._getArrayDebouncer(flatKey, value);
+			}
+		};
+		for (const flatKey of subKeys) {
+			if (!this.cache.has(flatKey) && !this.arrayDebouncers.has(flatKey)) {
+				const value = this.adapter.get(flatKey);
+				if (value instanceof Promise) {
+					promises.push(value.then(realValue => handleGetHandlerResult(flatKey, realValue)));
+				} else {
+					handleGetHandlerResult(flatKey, value);
+				}
+			}
+		}
+		if (nodeType === FlatSchemaValueType.FLAT_LINK) {
+			if (!this.cache.has(key)) {
+				this.cache.set(key, {});
+			}
+		}
+
+		const getReturnValue = () => {
+			if (nodeType === FlatSchemaValueType.FLAT_LINK) {
+				return this.cache.get(key);
+			}
+			if (nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+				const debouncer = this._getArrayDebouncer(key);
+				return new DeepProxyWrapExempt(debouncer._data);
+			}
+			return this.cache.get(key);
+		};
+
+		if (promises.length > 0) {
+			return Promise.all(promises).then(getReturnValue);
+		}
+		return getReturnValue();
 	}
-	/** @param {string} key */
-	async delete(key) {
+
+	/** 
+	 * @param {string} key 
+	 */
+	async delete(key = "") {
+		this.assertReady();
+		const path = key === "" ? [] : key.split(".");
+		const node = this._getSchemaNode(path);
+		if (node === undefined) return;
+
+		const nodeType = getSchemaNodeValueType(node);
+		if (nodeType === FlatSchemaValueType.FLAT_LINK || nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+			await this._clearCache(path);
+		}
+
 		this.cache.delete(key);
 		await this.adapter.delete(key);
+
+		if (path.length === 0) {
+			this.schema = {};
+			await this._updateSchema();
+		} else {
+			this._deleteSchemaNode(path);
+		}
 	}
+
 	/** @param {readonly string[]} path */
 	_getSchemaNode(path) {
 		let node = this.schema;
@@ -336,34 +746,94 @@ class FlatJSONStorage extends StorageInterface {
 		}
 		return node;
 	}
-	/** @param {readonly string[]} strings
+
+	/**
+	 * @param {readonly string[]} strings
 	 * @param {readonly any[]} keys
 	 */
 	async get(strings, ...keys) {
 		let path = strings[0];
 		keys.forEach((k, i) => path += k + strings[i + 1]);
-		return this.load(path);
+		const result = await this.load(path);
+		if (result instanceof DeepProxyWrapExempt) {
+			return result.value;
+		}
+		return result;
 	}
+
+	/** @deprecated */
 	getSchema() {
 		return this.schema;
 	}
+
+	/** 
+	 * @param {string} key 
+	 * @param {any[]} [initialArr] 
+	 * @returns {JSONDebounceStorage} 
+	 */
+	_getArrayDebouncer(key, initialArr) {
+		let debouncer = this.arrayDebouncers.get(key);
+		if (!debouncer) {
+			let arrTarget = initialArr || this.cache.get(key);
+			if (!Array.isArray(arrTarget)) {
+				throw new TypeError(
+					`[FlatJSONStorage] Expected an array but got ${typeof arrTarget} at "${key}". Schema and cache are out of sync.`
+				);
+			}
+			debouncer = new JSONDebounceStorage(
+				arrTarget,
+				async (newVal) => {
+					this.cache.set(key, newVal);
+					await this.adapter.set(key, newVal);
+				},
+				undefined,
+				true,
+				(value, path) => {
+					assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
+				}
+			);
+			this.arrayDebouncers.set(key, debouncer);
+			if (!this.cache.has(key)) {
+				this.cache.set(key, debouncer.cache);
+			}
+		}
+		return debouncer;
+	}
+	/** 
+	 * @param {string} key 
+	 */
+	_abortArrayDebouncer(key) {
+		const debouncer = this.arrayDebouncers.get(key);
+		if (debouncer) {
+			debouncer.abort();
+			this.arrayDebouncers.delete(key);
+			this.cache.delete(key);
+		}
+	}
 }
+
 class FlatWebStorage extends FlatJSONStorage {
-	/**
-	 * @param {Object} options
-	 * @param {string} [options.namespace]
-	 * @param {Storage} options.instance
+	/** 
+	 * @param {object} options 
+	 * @param {string} [options.namespace] 
+	 * @param {Storage} options.instance 
 	 */
 	constructor(options) {
 		const { instance, ...rest } = options;
 		if (!instance) throw new TypeError("Storage instance is required");
-		/**
-		 * @type {FlatStorageAdapter}
+		/** 
+		 * @type {FlatStorageAdapter} 
 		 */
 		const adapter = {
 			get: (key) => {
 				const val = instance.getItem(key);
-				return val ? JSON.parse(val) : undefined;
+				if (!val) return undefined;
+				try {
+					return JSON.parse(val);
+				} catch (e) {
+					console.error(e);
+					return undefined;
+				}
 			},
 			set: (key, value) => {
 				instance.setItem(key, JSON.stringify(value));
@@ -392,11 +862,11 @@ class StorageHelper {
 	constructor(updateDelayMs = 100) {
 		this.updateDelayMs = updateDelayMs;
 	}
-	/**
-	 * @deprecated
+	/** 
+	 * @deprecated 
 	 * @param {string} name 
 	 * @param {JSONStorageAdaptor} adaptor 
-	 * @returns {Promise<any>}
+	 * @returns {Promise<any>} 
 	 */
 	async getStorage(name, adaptor) {
 		const newStorage = new JSONDebounceStorage(await adaptor.initialValueGetter(name) ?? {}, value => adaptor.updater(name, value), this.updateDelayMs);
@@ -420,13 +890,13 @@ class StorageHelper {
 		)
 	};
 }
+
 export {
-	/** @deprecated */
-	JSONStorageAdaptor,
-	/** @deprecated */
-	JSONStorageAdaptor as StorageAdaptor,
+    /** @deprecated */ JSONStorageAdaptor,
+    /** @deprecated */ JSONStorageAdaptor as StorageAdaptor,
 	WebStorageItemStorage,
 	StorageHelper,
+	StorageInterface,
 	FlatJSONStorage,
 	FlatWebStorage
 };

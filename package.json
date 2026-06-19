@@ -1,20 +1,20 @@
 {
-  "name": "@54145a/storage2",
-  "version": "0.3.0",
-  "description": "My localStorage is a Javascript object.",
-  "scripts": {
-    "test": "node --experimental-webstorage --localstorage-file=test.db test.js"
-  },
-  "type": "module",
-  "main": "storage.js",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/54145a/145Storage2.git"
-  },
-  "keywords": [],
-  "author": "54145a",
-  "license": "AGPL-3.0-only",
-  "dependencies": {
-    "unstorage": "^1.17.5"
-  }
+	"name": "@54145a/storage2",
+	"version": "0.4.0",
+	"description": "My localStorage is a Javascript object.",
+	"scripts": {
+		"test": "node --experimental-webstorage --localstorage-file=test.db test.js"
+	},
+	"type": "module",
+	"main": "storage.js",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/54145a/145Storage2.git"
+	},
+	"keywords": [],
+	"author": "54145a",
+	"license": "AGPL-3.0-only",
+	"dependencies": {
+		"unstorage": "^1.17.5"
+	}
 }
