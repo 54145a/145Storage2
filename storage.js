@@ -427,7 +427,6 @@ class FlatJSONStorage extends StorageInterface {
 				const key = path.join(".");
 				const schemaNode = this._getSchemaNode(path);
 				const nodeType = getSchemaNodeValueType(schemaNode);
-
 				if (nodeType === FlatSchemaValueType.FLAT_LINK) {
 					let subTarget = this.cache.get(key);
 					if (!subTarget || typeof subTarget !== "object") {
@@ -436,22 +435,28 @@ class FlatJSONStorage extends StorageInterface {
 					}
 					return subTarget;
 				}
-
 				if (nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
 					if (!this.cache.has(key) && !this.arrayDebouncers.has(key)) {
-						throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
+						const loadResult = this.load(key);
+						if (loadResult instanceof Promise) {
+							throw new Error(`[FlatJSONStorage] Key not loaded (async adapter requires 'await load()'): "${key}".`);
+						}
 					}
 					const debouncer = this._getArrayDebouncer(key);
 					return new DeepProxyWrapExempt(debouncer._data);
 				}
-
 				if (this.cache.has(key)) {
 					return this.cache.get(key);
 				}
 				if (nodeType === undefined) {
 					return undefined;
 				}
-				throw new Error(`[FlatJSONStorage] Key not loaded: "${key}".`);
+
+				const loadResult = this.load(key);
+				if (loadResult instanceof Promise) {
+					throw new Error(`[FlatJSONStorage] Key not loaded (async adapter requires 'await load()'): "${key}".`);
+				}
+				return this.cache.get(key);
 			},
 			set: (target, path, value) => {
 				const key = path.join(".");
@@ -478,7 +483,7 @@ class FlatJSONStorage extends StorageInterface {
 				else newNodeType = FlatSchemaValueType.PRIMITIVE;
 				const isOldBranch = oldNodeType === FlatSchemaValueType.FLAT_LINK || oldNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY;
 				if (isOldBranch && !(oldNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY && newNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY)) {
-					this._clearCache(path);
+					this._clearCache(path).catch(console.error);
 				}
 
 				let schemaTypeMarker;
@@ -515,7 +520,7 @@ class FlatJSONStorage extends StorageInterface {
 				const nodeType = getSchemaNodeValueType(schemaNode);
 
 				if (nodeType === FlatSchemaValueType.FLAT_LINK || nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
-					this._clearCache(path);
+					this._clearCache(path).catch(console.error);
 				}
 
 				this.cache.delete(key);
@@ -565,7 +570,7 @@ class FlatJSONStorage extends StorageInterface {
 	/**
 	 * @param {readonly string[]} path
 	 */
-	_clearCache(path) {
+	async _clearCache(path) {
 		const key = path.join(".");
 		const node = this._getSchemaNode(path);
 		const nodeType = getSchemaNodeValueType(node);
@@ -575,9 +580,15 @@ class FlatJSONStorage extends StorageInterface {
 			this._abortArrayDebouncer(key);
 		}
 
-		for (const k of this.getSubKeys(key)) {
+		const subKeys = this.getSubKeys(key);
+		/** @type {Promise<void>[]} */
+		const deletePromises = [];
+
+		for (const k of subKeys) {
 			this.cache.delete(k);
-			(async () => { await this.adapter.delete(k); })().catch(console.error);
+
+			const p = (async () => await this.adapter.delete(k))().catch(console.error);
+			deletePromises.push(p);
 
 			const flatPath = k.split(".");
 			const flatNode = this._getSchemaNode(flatPath);
@@ -585,6 +596,8 @@ class FlatJSONStorage extends StorageInterface {
 				this._abortArrayDebouncer(k);
 			}
 		}
+
+		await Promise.all(deletePromises);
 	}
 
 	/** 
@@ -623,7 +636,9 @@ class FlatJSONStorage extends StorageInterface {
 		await this.adapter.set(SCHEMA_KEY, this.schema);
 	}
 
-	/** @param {readonly string[]} path */
+	/**
+	 * @param {readonly string[]} path
+	 */
 	_deleteSchemaNode(path) {
 		if (path.length === 0) return;
 		let node = this.schema;
@@ -635,31 +650,63 @@ class FlatJSONStorage extends StorageInterface {
 		this._updateSchema().catch(console.error);
 	}
 
-	/** 
-	 * @param {string} key 
+	/**
+	 * @param {string} [key=""]
 	 */
-	async load(key = "") {
+	load(key = "") {
 		this.assertReady();
 		const path = key === "" ? [] : key.split(".");
 		const node = this._getSchemaNode(path);
-		if (node === undefined) return;
+		if (node === undefined) return undefined;
 
-		for (const flatKey of this.getSubKeys(key)) {
-			if (!this.cache.has(flatKey)) {
-				const value = await this.adapter.get(flatKey);
-				this.cache.set(flatKey, value);
-				const flatPath = flatKey.split(".");
-				const flatNode = this._getSchemaNode(flatPath);
-				if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
-					this._getArrayDebouncer(flatKey, value);
+		const nodeType = getSchemaNodeValueType(node);
+
+		const subKeys = this.getSubKeys(key);
+		/** @type {Promise<void>[]} */
+		const promises = [];
+		/**
+		 * @param {string} flatKey
+		 * @param {any} value
+		 */
+		const handleGetHandlerResult = (flatKey, value) => {
+			this.cache.set(flatKey, value);
+			const flatPath = flatKey.split(".");
+			const flatNode = this._getSchemaNode(flatPath);
+			if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+				this._getArrayDebouncer(flatKey, value);
+			}
+		};
+		for (const flatKey of subKeys) {
+			if (!this.cache.has(flatKey) && !this.arrayDebouncers.has(flatKey)) {
+				const value = this.adapter.get(flatKey);
+				if (value instanceof Promise) {
+					promises.push(value.then(realValue => handleGetHandlerResult(flatKey, realValue)));
+				} else {
+					handleGetHandlerResult(flatKey, value);
 				}
 			}
 		}
-		if (getSchemaNodeValueType(node) === FlatSchemaValueType.FLAT_LINK) {
+		if (nodeType === FlatSchemaValueType.FLAT_LINK) {
 			if (!this.cache.has(key)) {
 				this.cache.set(key, {});
 			}
 		}
+
+		const getReturnValue = () => {
+			if (nodeType === FlatSchemaValueType.FLAT_LINK) {
+				return this.cache.get(key);
+			}
+			if (nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+				const debouncer = this._getArrayDebouncer(key);
+				return new DeepProxyWrapExempt(debouncer._data);
+			}
+			return this.cache.get(key);
+		};
+
+		if (promises.length > 0) {
+			return Promise.all(promises).then(getReturnValue);
+		}
+		return getReturnValue();
 	}
 
 	/** 
@@ -673,7 +720,7 @@ class FlatJSONStorage extends StorageInterface {
 
 		const nodeType = getSchemaNodeValueType(node);
 		if (nodeType === FlatSchemaValueType.FLAT_LINK || nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
-			this._clearCache(path);
+			await this._clearCache(path);
 		}
 
 		this.cache.delete(key);
@@ -697,15 +744,16 @@ class FlatJSONStorage extends StorageInterface {
 		return node;
 	}
 
-	/** 
-	 * @param {readonly string[]} strings 
-	 * @param {readonly any[]} keys 
+	/**
+	 * @param {readonly string[]} strings
+	 * @param {readonly any[]} keys
 	 */
 	async get(strings, ...keys) {
 		let path = strings[0];
 		keys.forEach((k, i) => path += k + strings[i + 1]);
 		return this.load(path);
 	}
+
 
 	/** @deprecated */
 	getSchema() {
