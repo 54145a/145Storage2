@@ -35,7 +35,7 @@ console.log("\n========================================");
 console.log("Advanced: Sync Read & Template Get");
 console.log("========================================");
 
-// Template String Get (Async API contract, works seamlessly)
+// Template String Get (Async API contract, works seamlessly, strongly recommended for asynchronous contexts)
 console.log("\n[1] Testing template string get...");
 const templateGetCount = await flatLocalStorage.get`count`; // Lighter than load in some cases
 console.log("Count via template string get:", templateGetCount);
