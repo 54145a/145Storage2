@@ -30,8 +30,16 @@ settings.count += 1;
 ## 🚀 Try it now
 
 ```javascript
+import { WebStorageItemStorage, FlatWebStorage } from "./storage.js";
+const flatLocalStorage = new FlatWebStorage({ namespace: "test", instance: localStorage });
+await flatLocalStorage.init();
+console.log("Synchronously read count from proxy:", flatLocalStorage.data.count);
+
+
 
 ```
+
+See `test.js` for more examples!
 
 ---
 
