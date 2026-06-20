@@ -1,6 +1,6 @@
 {
 	"name": "@54145a/storage2",
-	"version": "0.4.1",
+	"version": "0.4.2",
 	"description": "My localStorage is a Javascript object.",
 	"scripts": {
 		"test": "node --experimental-webstorage --localstorage-file=test.db test.js",
