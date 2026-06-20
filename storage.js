@@ -454,13 +454,13 @@ class FlatJSONStorage extends StorageInterface {
 				const key = path.join(".");
 				assertIsJSONStorageStorableValue(value, "flat path:", path);
 
-				if (typeof value === "object" && value !== null) {
+				/*if (typeof value === "object" && value !== null) {
 					try {
 						value = StorageInterface.getRaw(value);
 					} catch (e) {
 						throw new TypeError(`[FlatJSONStorage] Failed to serialize value at "${key}".`);
 					}
-				}
+				}*/
 
 				const oldSchemaNode = this._getSchemaNode(path);
 				const oldNodeType = getSchemaNodeValueType(oldSchemaNode);
