@@ -15,7 +15,7 @@ console.log("========================================");
 const flatLocalStorage = new FlatWebStorage({ namespace: "test", instance: localStorage });
 await flatLocalStorage.init();
 
-//Pre-load everything under the root
+//Pre-load everything under the root, not necessary for synchronous storage but simulates typical async usage and demonstrates the load API.
 await flatLocalStorage.load("");
 //To load a single key: await flatLocalStorage.load("count");
 
