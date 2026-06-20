@@ -300,7 +300,7 @@ class JSONDebounceStorage extends DebounceStorage {
 		});
 		this.init();
 	}
-	/** @type {ReturnType<createDeepProxy>} */
+	/** @type {ReturnType<typeof createDeepProxy>} */
 	_data;
 }
 
@@ -327,7 +327,11 @@ const FLAT_SCHEMA_KEY = "__145Storage__flatSchema__";
  * @property {(key: string) => Promise<void> | void} delete 
  */
 /**
- * @enum {string}
+ * @typedef {"0" | "{}" | "[]"} FlatSchemaValueType
+ */
+
+/**
+ * @type {Record<string, FlatSchemaValueType>}
  */
 const FlatSchemaValueType = {
 	PRIMITIVE: "0",

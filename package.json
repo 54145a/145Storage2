@@ -3,7 +3,8 @@
 	"version": "0.4.1",
 	"description": "My localStorage is a Javascript object.",
 	"scripts": {
-		"test": "node --experimental-webstorage --localstorage-file=test.db test.js"
+		"test": "node --experimental-webstorage --localstorage-file=test.db test.js",
+		"build:docs": "tsgo && node buildDocs.ts"
 	},
 	"type": "module",
 	"main": "storage.js",
@@ -16,5 +17,9 @@
 	"license": "AGPL-3.0-only",
 	"dependencies": {
 		"unstorage": "^1.17.5"
+	},
+	"devDependencies": {
+		"@types/node": "^26.0.0",
+		"@typescript/native-preview": "7.0.0-dev.20260619.1"
 	}
 }

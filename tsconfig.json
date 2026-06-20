@@ -1,0 +1,13 @@
+{
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "esnext",
+		"checkJs": true,
+		"emitDeclarationOnly": true,
+		"strict": true,
+		"declaration": true,
+	},
+	"include": [
+		"storage.js"
+	]
+}
