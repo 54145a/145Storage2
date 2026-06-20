@@ -17,7 +17,7 @@ await flatLocalStorage.init();
 
 //Pre-load everything under the root
 await flatLocalStorage.load("");
-await flatLocalStorage.load("count");
+//To load a single key: await flatLocalStorage.load("count");
 
 console.log("Everything in flat storage(old): ", JSON.stringify(flatLocalStorage.data));
 

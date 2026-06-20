@@ -1,8 +1,9 @@
-# 📦 145 Storage 2: My KV is a **plain Object**
+# 📦 145 Storage 2: My KV is a **plain Object**
 
+[![npm version](https://img.shields.io/npm/v/@54145a/storage2.svg)](https://www.npmjs.com/package/@54145a/storage2)[![license](https://img.shields.io/npm/l/@54145a/storage2.svg)](./LICENSE)[![GitHub stars](https://img.shields.io/github/stars/54145a/145Storage2.svg)](https://github.com/54145a/145Storage2)
 > A lightweight, smart JavaScript storage library that makes state persistence as easy as modifying a plain object.
 
-## Why 145 Storage 2?
+## Why 145 Storage 2
 
 Tired of writing this? 🤮
 
@@ -26,46 +27,10 @@ settings.count += 1;
 - 🔒 **Type Safety**: Blocks un-storable values (like `undefined` or `function`) to keep your storage safe.
 - 🌐 **Framework Agnostic**: Works in any vanilla JS or framework environment.
 
-### The Story
-
-145 Storage 2 was originally built on top of the legacy 145 Storage (now deprecated; source available at Box3-Tools), which was designed to interact with the Box3 game engine's built-in database interface. I've been working on the idea of elegant state persistence since soon after I learned JavaScript.
-
-## 🚀 Quick Start
-
-### Whole JSON Storage
-
-Best for small data that needs to be read/written all at once. Binds to a single Storage key.
+## 🚀 Try it now
 
 ```javascript
-import { WebStorageItemStorage } from "@54145a/storage2/storage.js";
-// Create a reactive storage object in one line
-const settings = new WebStorageItemStorage("settings", localStorage).data;
-// 🪄 Modify directly, auto-persists!
-settings.count = settings.count ? settings.count + 1 : 1;
-settings.user = { name: "Alice" };
-console.info("Count:", settings.count);
-```
 
-### Flat Key-Value Storage
-
-Best for large data where you need to update deep properties efficiently. It flattens nested objects into keys like `user.name` and `user.age`, saving only what changed.
-
-```javascript
-import { FlatWebStorage } from "@54145a/storage2/storage.js";
-const flatStorage = new FlatWebStorage({ 
-    namespace: "myApp", 
-    instance: localStorage 
-});
-await flatStorage.init();
-await flatStorage.load(""); // Load everything under the root
-flatStorage.data.count = flatStorage.data.count ? flatStorage.data.count + 1 : 1;
-flatStorage.data.arrTest ??= [];
-flatStorage.data.arrTest.push("I am an array!!!~");
-flatStorage.data.arrTest[1] = `Time: ${Date.now()}`; // Array mutations auto-save
-if ("count" in flatStorage.data) {
-    console.log("Count exists!");
-}
-console.log("Everything:", JSON.stringify(flatStorage.data));
 ```
 
 ---
@@ -88,10 +53,10 @@ This project is under active development, but the current version is stable and 
 - [x] Flat Storage Engine (`FlatJSONStorage` / `FlatWebStorage`)
 - [x] Smart debouncing for array operations
 - [x] Schema-based deep property traversal and loading
-- [ ] Synchronous read flat storage
+- [x] Synchronous read flat storage
 - [ ] Docs
-- [ ] Unstorage backend adaptation
-- [ ] IndexedDB adaptation
+
+This is the initial roadmap. See Github issues for more incoming.
 
 *(XML storage was planned but dropped. We are focusing on making JSON storage perfect!)*
 
