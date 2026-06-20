@@ -537,8 +537,7 @@ class FlatJSONStorage extends StorageInterface {
 				return [];
 			},
 			getOwnPropertyDescriptor: (target, path, prop) => {
-				const fullPath = [...path, prop.toString()];
-				const schemaNode = this._getSchemaNode(fullPath);
+				const schemaNode = this._getSchemaNode(path);
 				if (schemaNode !== undefined) {
 					return { configurable: true, enumerable: true, writable: true, value: undefined };
 				}
