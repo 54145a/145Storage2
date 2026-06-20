@@ -54,7 +54,7 @@ This project is under active development, but the current version is stable and 
 - [x] Smart debouncing for array operations
 - [x] Schema-based deep property traversal and loading
 - [x] Synchronous read flat storage
-- [ ] Docs
+- [x] Docs
 
 This is the initial roadmap. See Github issues for more incoming.
 
@@ -64,7 +64,7 @@ This is the initial roadmap. See Github issues for more incoming.
 
 Issues, PRs, and suggestions are super welcome! Let's make state persistence elegant, together!
 
-## Reference
+## 📚 Reference
 
 ```typescript
 {{DTS}}
