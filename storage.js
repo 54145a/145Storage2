@@ -286,12 +286,9 @@ class JSONDebounceStorage extends DebounceStorage {
 	/** 
 	 * @param {object} initialValue
 	 * @param {(value: Object)=>Promise<void>|void} updator
-	 * @param {number=} updateDelayMs
-	 * @param {boolean=} structuredCloneExempt
-	 * @param {(value: Object, path: readonly string[])=>void=} onSet
-	 * @todo 更改此函数参数
+	 * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, path: readonly string[])=>void}} options
 	 */
-	constructor(initialValue, updator, updateDelayMs, structuredCloneExempt, onSet = () => { }) {
+	constructor(initialValue, updator, { updateDelayMs, structuredCloneExempt, onSet = () => { } } = {}) {
 		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
 		this._data = createDeepProxy(this._cache, {
 			set: (target, path, value, receiver) => {
@@ -327,7 +324,7 @@ class WebStorageItemStorage extends JSONDebounceStorage {
 		} catch (e) {
 			console.error(e);
 		}
-		super(initialValue, value => instance.setItem(itemName, JSON.stringify(value)), updateDelayMs);
+		super(initialValue, value => instance.setItem(itemName, JSON.stringify(value)), { updateDelayMs });
 	}
 }
 
@@ -653,7 +650,6 @@ class FlatJSONStorage extends StorageInterface {
 
 	/**
 	 * @param {string} [key=""]
-	 * @todo 去重
 	 */
 	load(key = "") {
 		this.assertReady();
@@ -785,10 +781,11 @@ class FlatJSONStorage extends StorageInterface {
 					this.cache.set(key, newVal);
 					await this.adapter.set(key, newVal);
 				},
-				undefined,
-				true,
-				(value, path) => {
-					assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
+				{
+					structuredCloneExempt: true,
+					onSet: (value, path) => {
+						assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
+					}
 				}
 			);
 			this.arrayDebouncers.set(key, debouncer);
@@ -868,7 +865,7 @@ class StorageHelper {
 	 * @returns {Promise<any>} 
 	 */
 	async getStorage(name, adaptor) {
-		const newStorage = new JSONDebounceStorage(await adaptor.initialValueGetter(name) ?? {}, value => adaptor.updater(name, value), this.updateDelayMs);
+		const newStorage = new JSONDebounceStorage(await adaptor.initialValueGetter(name) ?? {}, value => adaptor.updater(name, value), { updateDelayMs: this.updateDelayMs });
 		return newStorage.data;
 	}
 	/** @deprecated */
