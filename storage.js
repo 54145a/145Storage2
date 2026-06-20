@@ -5,23 +5,21 @@
  */
 
 //#region 
-
 class ProxyCacheEntry {
 	/** 
 	 * @param {object} proxy 
-	 * @param {readonly string[]} firstPath 
+	 * @param {readonly string[]} firstPath
+	 * @param {DeepProxyHandler} handler
 	 */
-	constructor(proxy, firstPath) {
+	constructor(proxy, firstPath, handler) {
 		this.proxy = proxy;
 		this.firstPath = firstPath;
+		this.handler = handler;
 		Object.freeze(this);
 	}
 }
 /** @type {WeakMap<object, ProxyCacheEntry>} */
 const deepProxyCache = new WeakMap();
-
-/** @type { WeakRef<StorageInterface>[] } */
-const registeredStorages = [];
 
 /** 
  * @typedef {object} DeepProxyHandler 
@@ -45,38 +43,35 @@ class DeepProxyWrapExempt {
 	}
 }
 
-/** 
- * @param {object} target 
- * @param {DeepProxyHandler} handler 
- * @param {readonly string[]} [currentPath=[]] 
- * @returns {*} 
- * @todo 将路径检查移动 
+/**
+ * @param {*} prop
+ */
+const assertSymbol = prop => {
+	console.assert(typeof prop !== "symbol", "Symbol properties are not supported by createDeepProxy.");
+};
+/**
+ * @param {object} target
+ * @param {DeepProxyHandler} handler
+ * @param {readonly string[]} [currentPath=[]]
+ * @returns {*}
  */
 function createDeepProxy(target, handler, currentPath = []) {
 	const cacheEntry = deepProxyCache.get(target);
 	if (cacheEntry) {
-		if (cacheEntry.firstPath.join(".") !== currentPath.join(".")) {
-			console.warn(
-				"Same object with different paths.",
-				"First path:", cacheEntry.firstPath,
-				"Current path:", currentPath
-			);
+		if (cacheEntry.handler === handler && cacheEntry.firstPath.join(".") === currentPath.join(".")) {
+			return cacheEntry.proxy;
 		}
-		return cacheEntry.proxy;
+		console.warn(
+			"[createDeepProxy] Same object with different context. Overwriting cache.",
+			"Old handler/path:", cacheEntry.handler, cacheEntry.firstPath,
+			"New handler/path:", handler, currentPath
+		);
 	}
-	/** 
-	 * @param {keyof any} prop 
-	 */
-	const assertSymbol = prop => {
-		console.assert(typeof prop !== "symbol", "Symbol properties are not supported by createDeepProxy.");
-	};
 	const proxy = new Proxy(target, {
 		has(target, prop) {
 			assertSymbol(prop);
 			const path = [...currentPath, String(prop)];
-			if (handler.has) {
-				return handler.has(target, path);
-			}
+			if (handler.has) return handler.has(target, path);
 			return Reflect.has(target, prop);
 		},
 		get(obj, prop, receiver) {
@@ -84,9 +79,7 @@ function createDeepProxy(target, handler, currentPath = []) {
 			const path = Object.freeze([...currentPath, prop.toString()]);
 			if (handler.get) {
 				const result = handler.get(obj, path, receiver);
-				if (result instanceof DeepProxyWrapExempt) {
-					return result.value;
-				}
+				if (result instanceof DeepProxyWrapExempt) return result.value;
 				if (typeof result === "object" && result !== null && typeof result !== "function") {
 					return createDeepProxy(result, handler, path);
 				}
@@ -101,38 +94,32 @@ function createDeepProxy(target, handler, currentPath = []) {
 		set(obj, prop, value, receiver) {
 			assertSymbol(prop);
 			const path = [...currentPath, String(prop)];
-			if (handler.set) {
-				return handler.set(obj, path, value, receiver);
-			}
+			if (handler.set) return handler.set(obj, path, value, receiver);
 			return Reflect.set(obj, prop, value, receiver);
 		},
 		deleteProperty(obj, prop) {
 			assertSymbol(prop);
 			const path = [...currentPath, String(prop)];
-			if (handler.deleteProperty) {
-				return handler.deleteProperty(obj, path);
-			}
+			if (handler.deleteProperty) return handler.deleteProperty(obj, path);
 			return Reflect.deleteProperty(obj, prop);
 		},
 		ownKeys(target) {
-			if (handler.ownKeys) {
-				return handler.ownKeys(target, currentPath);
-			}
+			if (handler.ownKeys) return handler.ownKeys(target, currentPath);
 			return Reflect.ownKeys(target);
 		},
 		getOwnPropertyDescriptor(target, prop) {
 			assertSymbol(prop);
 			const path = [...currentPath, prop.toString()];
-			if (handler.getOwnPropertyDescriptor) {
-				return handler.getOwnPropertyDescriptor(target, path, prop);
-			}
+			if (handler.getOwnPropertyDescriptor) return handler.getOwnPropertyDescriptor(target, path, prop);
 			return Reflect.getOwnPropertyDescriptor(target, prop);
 		}
 	});
-	deepProxyCache.set(target, new ProxyCacheEntry(proxy, currentPath));
+	deepProxyCache.set(target, new ProxyCacheEntry(proxy, currentPath, handler));
 	return proxy;
 }
 
+/** @type { WeakRef<StorageInterface>[] } */
+const registeredStorages = [];
 class StorageInterface {
 	/** 
 	 * @param {*} observed 
