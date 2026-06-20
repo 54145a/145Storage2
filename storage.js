@@ -17,7 +17,6 @@ class ProxyCacheEntry {
 		Object.freeze(this);
 	}
 }
-
 /** @type {WeakMap<object, ProxyCacheEntry>} */
 const deepProxyCache = new WeakMap();
 
@@ -348,6 +347,11 @@ const FlatSchemaValueType = {
 	FLAT_LINK: "{}",
 	DEBOUNCE_ARRAY: "[]"
 };
+const FlatSchemaValueTypeMarker = {
+	[FlatSchemaValueType.PRIMITIVE]: 0,
+	[FlatSchemaValueType.FLAT_LINK]: {},
+	[FlatSchemaValueType.DEBOUNCE_ARRAY]: []
+}
 /**
  * @param {*} node
  * @returns {FlatSchemaValueType|undefined} 
@@ -358,6 +362,14 @@ function getSchemaNodeValueType(node) {
 	if (Array.isArray(node)) return FlatSchemaValueType.DEBOUNCE_ARRAY;
 	// Fallback for primitive markers (currently number 0)
 	return FlatSchemaValueType.PRIMITIVE;
+}
+/**
+ * @param {*} node
+ * @returns {boolean}
+ */
+function isSchemaLeafNode(node) {
+	const type = getSchemaNodeValueType(node);
+	return type === FlatSchemaValueType.PRIMITIVE || type === FlatSchemaValueType.DEBOUNCE_ARRAY;
 }
 class FlatJSONStorage extends StorageInterface {
 	/**
@@ -406,7 +418,6 @@ class FlatJSONStorage extends StorageInterface {
 				const key = path.join(".");
 				const schemaNode = this._getSchemaNode(path);
 				const nodeType = getSchemaNodeValueType(schemaNode);
-
 				if (nodeType === FlatSchemaValueType.FLAT_LINK) {
 					let subTarget = this.cache.get(key);
 					if (!subTarget || typeof subTarget !== "object") {
@@ -415,7 +426,6 @@ class FlatJSONStorage extends StorageInterface {
 					}
 					return subTarget;
 				}
-
 				if (nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
 					if (!this.cache.has(key) && !this.arrayDebouncers.has(key)) {
 						const loadResult = this.load(key);
@@ -430,7 +440,6 @@ class FlatJSONStorage extends StorageInterface {
 				if (this.cache.has(key)) {
 					return this.cache.get(key);
 				}
-
 				if (nodeType === undefined) {
 					return undefined;
 				}
@@ -467,17 +476,13 @@ class FlatJSONStorage extends StorageInterface {
 					this._clearCache(path).catch(console.error);
 				}
 
-				let schemaTypeMarker;
-				if (newNodeType === FlatSchemaValueType.FLAT_LINK) schemaTypeMarker = {};
-				else if (newNodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) schemaTypeMarker = [];
-				else schemaTypeMarker = 0; // PRIMITIVE
+				let schemaTypeMarker = FlatSchemaValueTypeMarker[newNodeType];
 
 				let node = this.schema;
 				for (let i = 0; i < path.length - 1; i++) {
 					if (!node[path[i]] || typeof node[path[i]] !== "object") node[path[i]] = {};
 					node = node[path[i]];
 				}
-				// 操作 Proxy 会自动触发 JSONDebounceStorage 的防抖更新
 				node[path[path.length - 1]] = schemaTypeMarker;
 
 				if (newNodeType === FlatSchemaValueType.FLAT_LINK) {
@@ -547,15 +552,6 @@ class FlatJSONStorage extends StorageInterface {
 	}
 
 	/**
-	 * @param {*} node
-	 * @returns {boolean}
-	 */
-	_isLeafNode(node) {
-		const type = getSchemaNodeValueType(node);
-		return type === FlatSchemaValueType.PRIMITIVE || type === FlatSchemaValueType.DEBOUNCE_ARRAY;
-	}
-
-	/**
 	 * @param {readonly string[]} path
 	 */
 	async _clearCache(path) {
@@ -590,7 +586,7 @@ class FlatJSONStorage extends StorageInterface {
 		const path = key === "" ? [] : key.split(".");
 		const node = this._getSchemaNode(path);
 		if (node === undefined) return [];
-		if (this._isLeafNode(node)) {
+		if (isSchemaLeafNode(node)) {
 			return [key];
 		}
 		/** @type {string[]} */
@@ -603,7 +599,7 @@ class FlatJSONStorage extends StorageInterface {
 			for (const subKey of Object.keys(currentNode)) {
 				const childPath = [...currentPath, subKey];
 				const childNode = currentNode[subKey];
-				if (this._isLeafNode(childNode)) {
+				if (isSchemaLeafNode(childNode)) {
 					keys.push(childPath.join("."));
 				} else {
 					traverseSchema(childNode, childPath);
@@ -625,6 +621,64 @@ class FlatJSONStorage extends StorageInterface {
 			node = node[path[i]];
 		}
 		delete node[path[path.length - 1]];
+	}
+	/** @param {readonly string[]} path */
+	_getSchemaNode(path) {
+		let node = this.schema;
+		for (const key of path) {
+			if (node && typeof node === "object") node = node[key];
+			else return undefined;
+		}
+		return node;
+	}
+	/** @deprecated */
+	getSchema() {
+		return this.schema;
+	}
+	/**
+	 * @param {string} key
+	 * @param {any[]} [initialArr]
+	 * @returns {JSONDebounceStorage}
+	 */
+	_getArrayDebouncer(key, initialArr) {
+		let debouncer = this.arrayDebouncers.get(key);
+		if (!debouncer) {
+			let arrTarget = initialArr || this.cache.get(key);
+			if (!Array.isArray(arrTarget)) {
+				throw new TypeError(
+					`[FlatJSONStorage] Expected an array but got ${typeof arrTarget} at "${key}". Schema and cache are out of sync.`
+				);
+			}
+			debouncer = new JSONDebounceStorage(
+				arrTarget,
+				async (newVal) => {
+					this.cache.set(key, newVal);
+					await this.adapter.set(key, newVal);
+				},
+				{
+					structuredCloneExempt: true,
+					onSet: (value, path) => {
+						assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
+					}
+				}
+			);
+			this.arrayDebouncers.set(key, debouncer);
+			if (!this.cache.has(key)) {
+				this.cache.set(key, debouncer.cache);
+			}
+		}
+		return debouncer;
+	}
+	/**
+	 * @param {string} key
+	 */
+	_abortArrayDebouncer(key) {
+		const debouncer = this.arrayDebouncers.get(key);
+		if (debouncer) {
+			debouncer.abort();
+			this.arrayDebouncers.delete(key);
+			this.cache.delete(key);
+		}
 	}
 
 	/**
@@ -681,7 +735,19 @@ class FlatJSONStorage extends StorageInterface {
 		}
 		return getReturnValue();
 	}
-
+	/**
+	 * @param {readonly string[]} strings
+	 * @param {readonly any[]} keys
+	 */
+	async get(strings, ...keys) {
+		let path = strings[0];
+		keys.forEach((k, i) => path += k + strings[i + 1]);
+		const result = await this.load(path);
+		if (result instanceof DeepProxyWrapExempt) {
+			return result.value;
+		}
+		return result;
+	}
 	/**
 	 * @param {string} key
 	 */
@@ -700,82 +766,6 @@ class FlatJSONStorage extends StorageInterface {
 			for (const k in this.schema) delete this.schema[k];
 		} else {
 			this._deleteSchemaNode(path);
-		}
-	}
-
-	/** @param {readonly string[]} path */
-	_getSchemaNode(path) {
-		let node = this.schema;
-		for (const key of path) {
-			if (node && typeof node === "object") node = node[key];
-			else return undefined;
-		}
-		return node;
-	}
-
-	/**
-	 * @param {readonly string[]} strings
-	 * @param {readonly any[]} keys
-	 */
-	async get(strings, ...keys) {
-		let path = strings[0];
-		keys.forEach((k, i) => path += k + strings[i + 1]);
-		const result = await this.load(path);
-		if (result instanceof DeepProxyWrapExempt) {
-			return result.value;
-		}
-		return result;
-	}
-
-	/** @deprecated */
-	getSchema() {
-		return this.schema;
-	}
-
-	/**
-	 * @param {string} key
-	 * @param {any[]} [initialArr]
-	 * @returns {JSONDebounceStorage}
-	 */
-	_getArrayDebouncer(key, initialArr) {
-		let debouncer = this.arrayDebouncers.get(key);
-		if (!debouncer) {
-			let arrTarget = initialArr || this.cache.get(key);
-			if (!Array.isArray(arrTarget)) {
-				throw new TypeError(
-					`[FlatJSONStorage] Expected an array but got ${typeof arrTarget} at "${key}". Schema and cache are out of sync.`
-				);
-			}
-			debouncer = new JSONDebounceStorage(
-				arrTarget,
-				async (newVal) => {
-					this.cache.set(key, newVal);
-					await this.adapter.set(key, newVal);
-				},
-				{
-					structuredCloneExempt: true,
-					onSet: (value, path) => {
-						assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
-					}
-				}
-			);
-			this.arrayDebouncers.set(key, debouncer);
-			if (!this.cache.has(key)) {
-				this.cache.set(key, debouncer.cache);
-			}
-		}
-		return debouncer;
-	}
-
-	/**
-	 * @param {string} key
-	 */
-	_abortArrayDebouncer(key) {
-		const debouncer = this.arrayDebouncers.get(key);
-		if (debouncer) {
-			debouncer.abort();
-			this.arrayDebouncers.delete(key);
-			this.cache.delete(key);
 		}
 	}
 }
