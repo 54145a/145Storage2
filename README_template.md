@@ -1,4 +1,4 @@
-# 📦 145 Storage 2: My KV is a **plain Object**
+# 📦 145 Storage 2: My KV is a **plain Object**
 
 [![npm version](https://img.shields.io/npm/v/@54145a/storage2.svg)](https://www.npmjs.com/package/@54145a/storage2)[![license](https://img.shields.io/npm/l/@54145a/storage2.svg)](./LICENSE)[![GitHub stars](https://img.shields.io/github/stars/54145a/145Storage2.svg)](https://github.com/54145a/145Storage2)
 > A lightweight, smart JavaScript storage library that makes state persistence as easy as modifying a plain object.
