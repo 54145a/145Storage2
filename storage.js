@@ -386,7 +386,8 @@ class FlatJSONStorage extends StorageInterface {
 	/** 
 	 * @param {FlatStorageAdapter} adapter 
 	 * @param {object} [options] 
-	 * @param {string} [options.namespace] 
+	 * @param {string} [options.namespace]
+	 * @todo 更新Schema管理机制
 	 */
 	constructor(adapter, options = {}) {
 		super();
