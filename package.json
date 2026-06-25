@@ -3,8 +3,8 @@
 	"version": "0.4.2",
 	"description": "My localStorage is a Javascript object.",
 	"scripts": {
-		"test": "node --experimental-webstorage --localstorage-file=test.db test.js",
-		"build:docs": "tsgo && node buildDocs.ts"
+		"test": "node --experimental-webstorage --localstorage-file=test.db test.ts",
+		"build": "tsgo && node buildDocs.ts"
 	},
 	"type": "module",
 	"main": "storage.js",

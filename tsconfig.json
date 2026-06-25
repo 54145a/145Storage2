@@ -6,6 +6,7 @@
 		"emitDeclarationOnly": true,
 		"strict": true,
 		"declaration": true,
+		"outDir": "build_tmp"
 	},
 	"include": [
 		"storage.js"
