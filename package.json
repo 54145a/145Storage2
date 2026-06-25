@@ -13,7 +13,14 @@
 		"type": "git",
 		"url": "https://github.com/54145a/145Storage2.git"
 	},
-	"keywords": [],
+	"keywords": [
+		"145Storage",
+		"145 Storage",
+		"storage",
+		"localStorage",
+		"sessionStorage",
+		"Web Storage"
+	],
 	"author": "54145a",
 	"license": "AGPL-3.0-only",
 	"dependencies": {
