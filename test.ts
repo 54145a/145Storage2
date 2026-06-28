@@ -1,3 +1,6 @@
+/**
+ * @file test.ts
+ */
 import { WebStorageItemStorage, FlatWebStorage } from "./storage.js";
 
 console.info("========================================");
