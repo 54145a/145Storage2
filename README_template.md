@@ -29,8 +29,8 @@ settings.count += 1;
 
 ## 🚀 Try it now
 
-```javascript
-
+```typescript
+{{TEST}}
 ```
 
 ---
