@@ -1,11 +1,18 @@
 {
 	"compilerOptions": {
+		"lib": [
+			"ESNext"
+		],
 		"target": "esnext",
 		"module": "esnext",
 		"checkJs": true,
 		"emitDeclarationOnly": true,
 		"strict": true,
-		"declaration": true
+		"declaration": true,
+		"skipLibCheck": true,
+		"types": [
+			"node"
+		]
 	},
 	"include": [
 		"storage.js"
