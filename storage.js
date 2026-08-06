@@ -340,8 +340,8 @@ const FlatSchemaValueType = {
 };
 const FlatSchemaValueTypeMarker = {
 	[FlatSchemaValueType.PRIMITIVE]: 0,
-	[FlatSchemaValueType.FLAT_LINK]: {},
-	[FlatSchemaValueType.DEBOUNCE_ARRAY]: []
+	[FlatSchemaValueType.FLAT_LINK]: "{}",
+	[FlatSchemaValueType.DEBOUNCE_ARRAY]: "[]"
 }
 /**
  * @param {*} node
@@ -349,6 +349,9 @@ const FlatSchemaValueTypeMarker = {
  */
 function getSchemaNodeValueType(node) {
 	if (node === undefined || node === null) return undefined;
+        // New string markers
+        if (node === "{}") return FlatSchemaValueType.FLAT_LINK;
+        if (node === "[]") return FlatSchemaValueType.DEBOUNCE_ARRAY;
 	if (isPlainObject(node)) return FlatSchemaValueType.FLAT_LINK;
 	if (Array.isArray(node)) return FlatSchemaValueType.DEBOUNCE_ARRAY;
 	// Fallback for primitive markers (currently number 0)
