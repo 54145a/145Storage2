@@ -26,6 +26,9 @@
 	],
 	"author": "54145a",
 	"license": "AGPL-3.0-only",
+	"publishConfig": {
+		"access": "public"
+	},
 	"dependencies": {
 		"unstorage": "^1.17.5"
 	},
