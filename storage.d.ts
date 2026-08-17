@@ -3,21 +3,21 @@
  * @license AGPL-3.0
  */
 export type DeepProxyHandler = {
-    has?: (target: Object, path: readonly string[]) => boolean;
-    get?: (target: Object, path: readonly string[], receiver: Object) => any;
-    set?: (target: Object, path: readonly string[], value: any, receiver: Object | undefined) => boolean;
-    deleteProperty?: (target: Object, path: readonly string[]) => boolean;
-    ownKeys?: (target: Object, path: readonly string[]) => string[];
-    getOwnPropertyDescriptor?: (target: Object, path: readonly string[], prop: string | symbol) => PropertyDescriptor | undefined;
+    has?: (target: Object, key: string) => boolean;
+    get?: (target: Object, key: string, receiver: Object) => any;
+    set?: (target: Object, key: string, value: any, receiver: Object | undefined) => boolean;
+    deleteProperty?: (target: Object, key: string) => boolean;
+    ownKeys?: (target: Object, key: string) => string[];
+    getOwnPropertyDescriptor?: (target: Object, key: string, prop: string | symbol) => PropertyDescriptor | undefined;
 };
 /**
  * @typedef {object} DeepProxyHandler
- * @property {(target: Object, path: readonly string[]) => boolean} [has]
- * @property {(target: Object, path: readonly string[], receiver: Object) => any} [get]
- * @property {(target: Object, path: readonly string[], value: any, receiver: Object|undefined) => boolean} [set]
- * @property {(target: Object, path: readonly string[]) => boolean} [deleteProperty]
- * @property {(target: Object, path: readonly string[]) => string[]} [ownKeys]
- * @property {(target: Object, path: readonly string[], prop: string | symbol) => PropertyDescriptor | undefined} [getOwnPropertyDescriptor]
+ * @property {(target: Object, key: string) => boolean} [has]
+ * @property {(target: Object, key: string, receiver: Object) => any} [get]
+ * @property {(target: Object, key: string, value: any, receiver: Object|undefined) => boolean} [set]
+ * @property {(target: Object, key: string) => boolean} [deleteProperty]
+ * @property {(target: Object, key: string) => string[]} [ownKeys]
+ * @property {(target: Object, key: string, prop: string | symbol) => PropertyDescriptor | undefined} [getOwnPropertyDescriptor]
  */
 /**
  * @see createDeepProxy
@@ -30,17 +30,16 @@ declare class DeepProxyWrapExempt {
     constructor(value: any);
 }
 /**
- * Creates a deep Proxy that reports every property access as a path
- * (e.g. `["user","profile","name"]`) to `handler`, nesting a proxy for each object.
+ * Creates a deep Proxy that reports every property access as a dot-separated key
+ * (e.g. `"user.profile.name"`) to `handler`, nesting a proxy for each object.
  * Symbol properties are NOT supported — they're ignored with a `console.assert`
  * notice and never reach `handler`.
  * @param {object} target
  * @param {DeepProxyHandler} handler
- * @param {readonly string[]} [currentPath=[]]
- * @param {string} [currentKey] Precomputed `currentPath.join(".")` to skip the join on cache hits.
+ * @param {string} [currentKey=""]
  * @returns {*}
  */
-declare function createDeepProxy(target: object, handler: DeepProxyHandler, currentPath?: readonly string[], currentKey?: string): any;
+declare function createDeepProxy(target: object, handler: DeepProxyHandler, currentKey?: string): any;
 declare class StorageInterface {
     scheduledUpdate: boolean | undefined;
     /**
@@ -90,27 +89,15 @@ declare class JSONDebounceStorage extends DebounceStorage {
     /**
      * @param {object} initialValue
      * @param {(value: Object)=>Promise<void>|void} updator
-     * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, path: readonly string[])=>void}} options
+     * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
      */
     constructor(initialValue: object, updator: (value: Object) => Promise<void> | void, { updateDelayMs, structuredCloneExempt, onSet }?: {
         updateDelayMs?: number;
         structuredCloneExempt?: boolean;
-        onSet?: (value: Object, path: readonly string[]) => void;
+        onSet?: (value: Object, key: string) => void;
     });
     /** @type {ReturnType<typeof createDeepProxy>} */
     _data: ReturnType<typeof createDeepProxy>;
-}
-export type StorageUpdater = (name: string, data: Object) => void;
-/** @deprecated */
-declare class JSONStorageAdaptor {
-    initialValueGetter: (name: string) => Promise<Object> | Object;
-    updater: StorageUpdater;
-    /**
-     * @typedef {(name: string, data: Object)=>void} StorageUpdater
-     * @param {(name: string)=>Promise<Object>|Object} initialValueGetter
-     * @param {StorageUpdater} updater
-     */
-    constructor(initialValueGetter: (name: string) => Promise<Object> | Object, updater: StorageUpdater);
 }
 export type FlatStorageAdapter = {
     get: (key: string) => Promise<any> | any;
@@ -150,26 +137,22 @@ declare class FlatJSONStorage extends StorageInterface {
     /** @override */
     init(): Promise<void>;
     /**
-     * @param {readonly string[]} path
+     * @param {string} key
      */
-    _clearCache(path: readonly string[]): Promise<void>;
+    _clearCache(key: string): Promise<void>;
     /**
      * @param {string} [key=""]
      * @returns {string[]}
      */
     getSubKeys(key?: string): string[];
     /**
-     * @param {readonly string[]} path
+     * @param {string} key
      */
-    _deleteSchemaNode(path: readonly string[]): void;
-    /** @param {readonly string[]} path */
-    _getSchemaNode(path: readonly string[]): {
+    _deleteSchemaNode(key: string): void;
+    /** @param {string} key */
+    _getSchemaNode(key: string): {
         [k: string]: any;
     } | undefined;
-    /** @deprecated */
-    getSchema(): {
-        [k: string]: any;
-    };
     /**
      * @param {string} key
      * @returns {DeepProxyWrapExempt}
@@ -237,22 +220,4 @@ declare class FlatUnstorage extends FlatJSONStorage {
         namespace?: string;
     });
 }
-/** @deprecated */
-declare class StorageHelper {
-    updateDelayMs: number;
-    constructor(updateDelayMs?: number);
-    /**
-     * @deprecated
-     * @param {string} name
-     * @param {JSONStorageAdaptor} adaptor
-     * @returns {Promise<any>}
-     */
-    getStorage(name: string, adaptor: JSONStorageAdaptor): Promise<any>;
-    /** @deprecated */
-    static ADAPTORS: {
-        LOCAL_STORAGE: JSONStorageAdaptor;
-    };
-}
-export { 
-/** @deprecated */ JSONStorageAdaptor, 
-/** @deprecated */ JSONStorageAdaptor as StorageAdaptor, WebStorageItemStorage, StorageHelper, StorageInterface, FlatJSONStorage, FlatWebStorage, FlatUnstorage };
+export { WebStorageItemStorage, StorageInterface, FlatJSONStorage, FlatWebStorage, FlatUnstorage };
