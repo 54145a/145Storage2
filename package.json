@@ -29,11 +29,10 @@
 	"publishConfig": {
 		"access": "public"
 	},
-	"dependencies": {
-		"unstorage": "^1.17.5"
-	},
+	"dependencies": {},
 	"devDependencies": {
 		"@types/node": "^26.2.0",
-		"typescript": "^7.0.2"
+		"typescript": "^7.0.2",
+		"unstorage": "^1.17.5"
 	}
 }

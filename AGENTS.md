@@ -30,7 +30,7 @@ pnpm site        # TypeDoc build → docs/dist (site only; buildDocs.ts runs thi
 
 ## Conventions / gotchas
 
-- `storage.js` is **not** dependency-free anymore: `FlatUnstorage` accepts an unstorage `Storage` instance (type-only import in JSDoc). Users create their own storage; `unstorage` is a runtime dependency.
+- `storage.js` is dependency-free: `FlatUnstorage` accepts an unstorage `Storage` instance (type-only import in JSDoc). Users create their own storage; `unstorage` is a devDependency only.
 - Debounced writes flush asynchronously (`updateDelayMs`, default 100ms) — tests always `await setTimeout(150)` before asserting on raw storage.
 - `FlatJSONStorage.load(key?)` is synchronous when the key is cached, returns a Promise otherwise — tests assert this explicitly.
 - Template-tag get API: `flat.get\`key\`` (async) — the README and tests lean on this.
