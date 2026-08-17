@@ -4,8 +4,6 @@
  * @license AGPL-3.0
  */
 
-import { createStorage } from "unstorage";
-
 //#region 
 class ProxyCacheEntry {
 	/** 
@@ -847,21 +845,19 @@ class FlatWebStorage extends FlatJSONStorage {
 class FlatUnstorage extends FlatJSONStorage {
 	/** 
 	 * @param {object} options 
-	 * @param {ReturnType<typeof import("unstorage").createStorage>} [options.storage] An existing unstorage instance.
-	 * @param {NonNullable<Parameters<typeof import("unstorage").createStorage>[0]>["driver"]} [options.driver] A unstorage driver used to create a storage from when `options.storage` is not given.
+	 * @param {ReturnType<typeof import("unstorage").createStorage>} options.storage An unstorage instance.
 	 * @param {string} [options.namespace] 
 	 */
-	constructor(options = {}) {
-		const { storage, driver, ...rest } = options;
-		if (!storage && !driver) throw new TypeError("Either 'storage' or 'driver' is required for FlatUnstorage.");
-		const unstorage = storage || createStorage({ driver });
+	constructor(options) {
+		const { storage, namespace } = options;
+		if (!storage) throw new TypeError("'storage' is required for FlatUnstorage.");
 		/** @type {FlatStorageAdapter} */
 		const adapter = {
-			get: (key) => unstorage.getItem(key),
-			set: (key, value) => unstorage.setItem(key, value),
-			delete: (key) => unstorage.removeItem(key),
+			get: (key) => storage.getItem(key),
+			set: (key, value) => storage.setItem(key, value),
+			delete: (key) => storage.removeItem(key),
 		};
-		super(adapter, rest);
+		super(adapter, { namespace });
 	}
 }
 

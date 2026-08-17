@@ -114,6 +114,10 @@ declare class FlatJSONStorage extends StorageInterface {
     };
     /** @type {Map<string, any>} */
     cache: Map<string, any>;
+    /** @type {Map<string, string[]>} */
+    _splitCache: Map<string, string[]>;
+    /** @type {Map<string, Function>} */
+    _accessorCache: Map<string, Function>;
     /** @type {Map<string, JSONDebounceStorage>} */
     arrayDebouncers: Map<string, JSONDebounceStorage>;
     /** @type {WeakMap<JSONDebounceStorage, DeepProxyWrapExempt>} */
@@ -150,9 +154,7 @@ declare class FlatJSONStorage extends StorageInterface {
      */
     _deleteSchemaNode(key: string): void;
     /** @param {string} key */
-    _getSchemaNode(key: string): {
-        [k: string]: any;
-    } | undefined;
+    _getSchemaNode(key: string): any;
     /**
      * @param {string} key
      * @returns {DeepProxyWrapExempt}
@@ -210,13 +212,11 @@ declare class FlatWebStorage extends FlatJSONStorage {
 declare class FlatUnstorage extends FlatJSONStorage {
     /**
      * @param {object} options
-     * @param {ReturnType<typeof import("unstorage").createStorage>} [options.storage] An existing unstorage instance.
-     * @param {NonNullable<Parameters<typeof import("unstorage").createStorage>[0]>["driver"]} [options.driver] A unstorage driver used to create a storage from when `options.storage` is not given.
+     * @param {ReturnType<typeof import("unstorage").createStorage>} options.storage An unstorage instance.
      * @param {string} [options.namespace]
      */
-    constructor(options?: {
-        storage?: ReturnType<typeof import("unstorage").createStorage>;
-        driver?: NonNullable<Parameters<typeof import("unstorage").createStorage>[0]>["driver"];
+    constructor(options: {
+        storage: ReturnType<typeof import("unstorage").createStorage>;
         namespace?: string;
     });
 }

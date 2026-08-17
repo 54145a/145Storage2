@@ -250,8 +250,8 @@ await test("unstorage: store and retrieve a simple value", async () => {
   assert.equal(await flat.get`count`, 10);
 });
 
-await test("unstorage: can construct from a driver directly", async () => {
-  const flat = new FlatUnstorage({ driver: memory() });
+await test("unstorage: can construct from a storage instance", async () => {
+  const flat = new FlatUnstorage({ storage: makeUnstorage() });
   await flat.init();
   await flat.load("");
   flat.data.x = 42;
@@ -334,7 +334,8 @@ await test("unstorage: array push with debouncing", async () => {
 });
 
 await test("unstorage: requires storage or driver", () => {
-  assert.throws(() => new FlatUnstorage(), /storage.*driver/i);
+  // @ts-ignore - testing that missing storage throws
+  assert.throws(() => new FlatUnstorage({}), /storage/i);
 });
 // #endregion
 
@@ -347,7 +348,7 @@ console.info("\n🎉 All tests passed!");
 
 ## 🌍 Unstorage: Any KV Backend as a JSON Object
 
-`FlatUnstorage` adapts an [unstorage](https://unstorage.unjs.io/) instance (or a raw driver) into a `FlatJSONStorage`. This lets you treat **any** key-value backend — memory, filesystem, Redis, HTTP, Vercel KV, etc. — as a plain nested JSON object:
+`FlatUnstorage` adapts an [unstorage](https://unstorage.unjs.io/) instance into a `FlatJSONStorage`. This lets you treat **any** key-value backend — memory, filesystem, Redis, HTTP, Vercel KV, etc. — as a plain nested JSON object:
 
 ```typescript
 import { FlatUnstorage } from "./storage.js";
@@ -355,8 +356,8 @@ import { createStorage } from "unstorage";
 import fsDriver from "unstorage/drivers/fs-lite";
 // or memory: import memoryDriver from "unstorage/drivers/memory";
 
-const flat = new FlatUnstorage({ storage: createStorage({ driver: fsDriver({ base: "./data" }) }) });
-// or: new FlatUnstorage({ driver: fsDriver({ base: "./data" }) })
+const storage = createStorage({ driver: fsDriver({ base: "./data" }) });
+const flat = new FlatUnstorage({ storage });
 
 await flat.init();
 await flat.load("");          // unstorage is async: always await load() or use flat.get`...`
@@ -532,6 +533,10 @@ declare class FlatJSONStorage extends StorageInterface {
     };
     /** @type {Map<string, any>} */
     cache: Map<string, any>;
+    /** @type {Map<string, string[]>} */
+    _splitCache: Map<string, string[]>;
+    /** @type {Map<string, Function>} */
+    _accessorCache: Map<string, Function>;
     /** @type {Map<string, JSONDebounceStorage>} */
     arrayDebouncers: Map<string, JSONDebounceStorage>;
     /** @type {WeakMap<JSONDebounceStorage, DeepProxyWrapExempt>} */
@@ -568,9 +573,7 @@ declare class FlatJSONStorage extends StorageInterface {
      */
     _deleteSchemaNode(key: string): void;
     /** @param {string} key */
-    _getSchemaNode(key: string): {
-        [k: string]: any;
-    } | undefined;
+    _getSchemaNode(key: string): any;
     /**
      * @param {string} key
      * @returns {DeepProxyWrapExempt}
@@ -628,13 +631,11 @@ declare class FlatWebStorage extends FlatJSONStorage {
 declare class FlatUnstorage extends FlatJSONStorage {
     /**
      * @param {object} options
-     * @param {ReturnType<typeof import("unstorage").createStorage>} [options.storage] An existing unstorage instance.
-     * @param {NonNullable<Parameters<typeof import("unstorage").createStorage>[0]>["driver"]} [options.driver] A unstorage driver used to create a storage from when `options.storage` is not given.
+     * @param {ReturnType<typeof import("unstorage").createStorage>} options.storage An unstorage instance.
      * @param {string} [options.namespace]
      */
-    constructor(options?: {
-        storage?: ReturnType<typeof import("unstorage").createStorage>;
-        driver?: NonNullable<Parameters<typeof import("unstorage").createStorage>[0]>["driver"];
+    constructor(options: {
+        storage: ReturnType<typeof import("unstorage").createStorage>;
         namespace?: string;
     });
 }

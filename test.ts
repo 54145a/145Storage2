@@ -218,8 +218,8 @@ await test("unstorage: store and retrieve a simple value", async () => {
   assert.equal(await flat.get`count`, 10);
 });
 
-await test("unstorage: can construct from a driver directly", async () => {
-  const flat = new FlatUnstorage({ driver: memory() });
+await test("unstorage: can construct from a storage instance", async () => {
+  const flat = new FlatUnstorage({ storage: makeUnstorage() });
   await flat.init();
   await flat.load("");
   flat.data.x = 42;
@@ -302,7 +302,8 @@ await test("unstorage: array push with debouncing", async () => {
 });
 
 await test("unstorage: requires storage or driver", () => {
-  assert.throws(() => new FlatUnstorage(), /storage.*driver/i);
+  // @ts-ignore - testing that missing storage throws
+  assert.throws(() => new FlatUnstorage({}), /storage/i);
 });
 // #endregion
 

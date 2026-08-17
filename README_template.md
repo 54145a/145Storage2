@@ -37,7 +37,7 @@ settings.count += 1;
 
 ## 🌍 Unstorage: Any KV Backend as a JSON Object
 
-`FlatUnstorage` adapts an [unstorage](https://unstorage.unjs.io/) instance (or a raw driver) into a `FlatJSONStorage`. This lets you treat **any** key-value backend — memory, filesystem, Redis, HTTP, Vercel KV, etc. — as a plain nested JSON object:
+`FlatUnstorage` adapts an [unstorage](https://unstorage.unjs.io/) instance into a `FlatJSONStorage`. This lets you treat **any** key-value backend — memory, filesystem, Redis, HTTP, Vercel KV, etc. — as a plain nested JSON object:
 
 ```typescript
 import { FlatUnstorage } from "./storage.js";
@@ -45,8 +45,8 @@ import { createStorage } from "unstorage";
 import fsDriver from "unstorage/drivers/fs-lite";
 // or memory: import memoryDriver from "unstorage/drivers/memory";
 
-const flat = new FlatUnstorage({ storage: createStorage({ driver: fsDriver({ base: "./data" }) }) });
-// or: new FlatUnstorage({ driver: fsDriver({ base: "./data" }) })
+const storage = createStorage({ driver: fsDriver({ base: "./data" }) });
+const flat = new FlatUnstorage({ storage });
 
 await flat.init();
 await flat.load("");          // unstorage is async: always await load() or use flat.get`...`
