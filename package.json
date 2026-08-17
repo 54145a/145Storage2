@@ -4,8 +4,10 @@
 	"description": "My localStorage is a Javascript object.",
 	"scripts": {
 		"test": "node --experimental-webstorage --localstorage-file=test.db test.ts",
-		"build": "tsgo && node buildDocs.ts",
-		"prepublish": "tsgo"
+		"build": "tsc && tsc -p scripts/tsconfig.json && tsc -p tsconfig.build.json && node scripts/buildDocs.ts",
+		"bench": "node --experimental-webstorage --localstorage-file=/tmp/bench.db scripts/bench.js",
+		"site": "pnpm dlx --package typescript@6.0.3 --package typedoc@0.28.20 typedoc --options typedoc.json",
+		"prepublish": "tsc -p tsconfig.build.json"
 	},
 	"type": "module",
 	"main": "storage.js",
@@ -19,7 +21,8 @@
 		"storage",
 		"localStorage",
 		"sessionStorage",
-		"Web Storage"
+		"Web Storage",
+		"unstorage"
 	],
 	"author": "54145a",
 	"license": "AGPL-3.0-only",
@@ -27,7 +30,7 @@
 		"unstorage": "^1.17.5"
 	},
 	"devDependencies": {
-		"@types/node": "^26.0.0",
-		"@typescript/native-preview": "7.0.0-dev.20260619.1"
+		"@types/node": "^26.2.0",
+		"typescript": "^7.0.2"
 	}
 }

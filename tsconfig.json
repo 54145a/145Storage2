@@ -6,15 +6,15 @@
 		"target": "esnext",
 		"module": "esnext",
 		"checkJs": true,
-		"emitDeclarationOnly": true,
+		"noEmit": true,
 		"strict": true,
-		"declaration": true,
 		"skipLibCheck": true,
 		"types": [
 			"node"
 		]
 	},
 	"include": [
-		"storage.js"
+		"storage.js",
+		"test.ts"
 	]
 }

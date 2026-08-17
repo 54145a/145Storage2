@@ -1,0 +1,11 @@
+{
+	"$schema": "https://typedoc.org/schema.json",
+	"name": "145 Storage 2",
+	"entryPoints": ["storage.js"],
+	"out": "docs/dist",
+	"readme": "README.md",
+	"includeVersion": true,
+	"excludePrivate": true,
+	"excludeExternals": true,
+	"skipErrorChecking": true
+}

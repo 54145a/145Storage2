@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { WebStorageItemStorage, FlatWebStorage } from "./storage.js";
+import { WebStorageItemStorage, FlatWebStorage, FlatUnstorage } from "./storage.js";
+import { createStorage } from "unstorage";
+import memory from "unstorage/drivers/memory";
 
 
 // #region Test Harness
@@ -194,6 +196,113 @@ await test("multiple namespaces should be isolated", async () => {
   await new Promise((r) => setTimeout(r, 150));
   assert.equal(await flatA.get`key`, "fromA");
   assert.equal(await flatB.get`key`, "fromB");
+});
+// #endregion
+
+// #region FlatUnstorage Tests
+
+function makeUnstorage() {
+  return createStorage({ driver: memory() });
+}
+
+console.info("\n========================================");
+console.info("FlatUnstorage");
+console.info("========================================");
+
+await test("unstorage: store and retrieve a simple value", async () => {
+  const flat = new FlatUnstorage({ storage: makeUnstorage() });
+  await flat.init();
+  await flat.load("");
+  flat.data.count = 10;
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(await flat.get`count`, 10);
+});
+
+await test("unstorage: can construct from a driver directly", async () => {
+  const flat = new FlatUnstorage({ driver: memory() });
+  await flat.init();
+  await flat.load("");
+  flat.data.x = 42;
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(await flat.get`x`, 42);
+});
+
+await test("unstorage: persists across instances", async () => {
+  const storage = makeUnstorage();
+  const flatA = new FlatUnstorage({ storage });
+  await flatA.init();
+  await flatA.load("");
+  flatA.data.user = { name: "alice", prefs: { theme: "dark" } };
+  await new Promise((r) => setTimeout(r, 150));
+
+  const flatB = new FlatUnstorage({ storage });
+  await flatB.init();
+  await flatB.load("");
+  assert.equal(await flatB.get`user.prefs.theme`, "dark");
+});
+
+await test("unstorage: namespaces are isolated", async () => {
+  const storage = makeUnstorage();
+  const flatA = new FlatUnstorage({ storage, namespace: "ns_a" });
+  const flatB = new FlatUnstorage({ storage, namespace: "ns_b" });
+  await flatA.init();
+  await flatB.init();
+  await flatA.load("");
+  await flatB.load("");
+  flatA.data.key = "fromA";
+  flatB.data.key = "fromB";
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(await flatA.get`key`, "fromA");
+  assert.equal(await flatB.get`key`, "fromB");
+});
+
+await test("unstorage: load() returns a Promise for async adapters", async () => {
+  const flat = new FlatUnstorage({ storage: makeUnstorage() });
+  await flat.init();
+  await flat.load("");
+  flat.data.val = 99;
+  await new Promise((r) => setTimeout(r, 150));
+  flat.cache.clear();
+  flat.arrayDebouncers.clear();
+  const result = flat.load("val");
+  assert.equal(result instanceof Promise, true, "load() should be async for unstorage");
+  assert.equal(await result, 99);
+});
+
+await test("unstorage: sync read after cache clear throws", async () => {
+  const flat = new FlatUnstorage({ storage: makeUnstorage() });
+  await flat.init();
+  await flat.load("");
+  flat.data.val = 99;
+  await new Promise((r) => setTimeout(r, 150));
+  flat.cache.clear();
+  flat.arrayDebouncers.clear();
+  assert.throws(() => { flat.data.val; }, /not loaded/);
+});
+
+await test("unstorage: delete should remove a key", async () => {
+  const flat = new FlatUnstorage({ storage: makeUnstorage() });
+  await flat.init();
+  await flat.load("");
+  flat.data.toRemove = "bye";
+  await new Promise((r) => setTimeout(r, 150));
+  await flat.delete("toRemove");
+  assert.equal(await flat.get`toRemove`, undefined);
+});
+
+await test("unstorage: array push with debouncing", async () => {
+  const flat = new FlatUnstorage({ storage: makeUnstorage() });
+  await flat.init();
+  await flat.load("");
+  flat.data.items ??= [];
+  flat.data.items.push("a");
+  flat.data.items.push("b");
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(await flat.get`items`, ["a", "b"]);
+});
+
+await test("unstorage: requires storage or driver", () => {
+  assert.throws(() => new FlatUnstorage(), /storage.*driver/i);
 });
 // #endregion
 
