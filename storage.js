@@ -352,9 +352,9 @@ const FlatSchemaValueTypeMarker = {
  */
 function getSchemaNodeValueType(node) {
 	if (node === undefined || node === null) return undefined;
-        // New string markers
-        if (node === "{}") return FlatSchemaValueType.FLAT_LINK;
-        if (node === "[]") return FlatSchemaValueType.DEBOUNCE_ARRAY;
+	// New string markers
+	if (node === "{}") return FlatSchemaValueType.FLAT_LINK;
+	if (node === "[]") return FlatSchemaValueType.DEBOUNCE_ARRAY;
 	if (isPlainObject(node)) return FlatSchemaValueType.FLAT_LINK;
 	if (Array.isArray(node)) return FlatSchemaValueType.DEBOUNCE_ARRAY;
 	// Fallback for primitive markers (currently number 0)
