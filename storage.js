@@ -499,32 +499,32 @@ class FlatJSONStorage extends StorageInterface {
 					assertIsFlatJSONStorageStorableArray(value, "at key:", key);
 					const debouncer = this._getArrayDebouncer(key, value);
 					debouncer._data.splice(0, debouncer._data.length, ...value);
-			} else {
-				this.cache.set(key, value);
+				} else {
+					this.cache.set(key, value);
+					try {
+						handleAdapterResult(this.adapter.set(key, value));
+					} catch (e) {
+						console.error(e);
+					}
+				}
+				return true;
+			},
+			deleteProperty: (target, key) => {
+				const schemaNode = this._getSchemaNode(key);
+				const nodeType = getSchemaNodeValueType(schemaNode);
+
+				if (nodeType === FlatSchemaValueType.FLAT_LINK || nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+					this._clearCache(key).catch(console.error);
+				}
+				this.cache.delete(key);
 				try {
-					handleAdapterResult(this.adapter.set(key, value));
+					handleAdapterResult(this.adapter.delete(key));
 				} catch (e) {
 					console.error(e);
 				}
-			}
-			return true;
-		},
-		deleteProperty: (target, key) => {
-			const schemaNode = this._getSchemaNode(key);
-			const nodeType = getSchemaNodeValueType(schemaNode);
-
-			if (nodeType === FlatSchemaValueType.FLAT_LINK || nodeType === FlatSchemaValueType.DEBOUNCE_ARRAY) {
-				this._clearCache(key).catch(console.error);
-			}
-			this.cache.delete(key);
-			try {
-				handleAdapterResult(this.adapter.delete(key));
-			} catch (e) {
-				console.error(e);
-			}
-			this._deleteSchemaNode(key);
-			return true;
-		},
+				this._deleteSchemaNode(key);
+				return true;
+			},
 			ownKeys: (target, key) => {
 				const schemaNode = this._getSchemaNode(key);
 				if (schemaNode && typeof schemaNode === "object") {
