@@ -46,8 +46,29 @@ class DeepProxyWrapExempt {
 /**
  * @param {*} prop
  */
-const assertSymbol = prop => {
-	console.assert(typeof prop !== "symbol", "Symbol properties are not supported by createDeepProxy.");
+/** @type {Set<symbol>} */
+const builtInSymbols = new Set();
+for (const key of Object.getOwnPropertyNames(Symbol)) {
+	try {
+		const val = /** @type {any} */ (Symbol)[key];
+		if (typeof val === "symbol") builtInSymbols.add(val);
+	} catch {}
+}
+for (const key of Object.getOwnPropertyNames(Symbol.prototype)) {
+	try {
+		const val = /** @type {any} */ (Symbol.prototype)[key];
+		if (typeof val === "symbol") builtInSymbols.add(val);
+	} catch {}
+}
+
+const assertSymbol = (/** @type {string|symbol} */ prop) => {
+	if (typeof prop === "symbol" && !builtInSymbols.has(prop)) {
+		throw new TypeError(
+			`Symbol("${Symbol.keyFor(prop) || prop.description}") is not a built-in Symbol ` +
+			`and is not supported by createDeepProxy. ` +
+			`JSON storage cannot serialize Symbol properties.`
+		);
+	}
 };
 /**
  * Creates a deep Proxy that reports every property access as a dot-separated key
