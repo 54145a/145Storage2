@@ -3,20 +3,45 @@
  * @license AGPL-3.0
  */
 export type DeepProxyHandler = {
-    has?: (target: Object, path: readonly string[]) => boolean;
-    get?: (target: Object, path: readonly string[], receiver: Object) => any;
-    set?: (target: Object, path: readonly string[], value: any, receiver: Object | undefined) => boolean;
-    deleteProperty?: (target: Object, path: readonly string[]) => boolean;
-    ownKeys?: (target: Object, path: readonly string[]) => string[];
-    getOwnPropertyDescriptor?: (target: Object, path: readonly string[], prop: string | symbol) => PropertyDescriptor | undefined;
+    has?: (target: Object, key: string) => boolean;
+    get?: (target: Object, key: string, receiver: Object) => any;
+    set?: (target: Object, key: string, value: any, receiver: Object | undefined) => boolean;
+    deleteProperty?: (target: Object, key: string) => boolean;
+    ownKeys?: (target: Object, key: string) => string[];
+    getOwnPropertyDescriptor?: (target: Object, key: string, prop: string | symbol) => PropertyDescriptor | undefined;
 };
 /**
+ * @typedef {object} DeepProxyHandler
+ * @property {(target: Object, key: string) => boolean} [has]
+ * @property {(target: Object, key: string, receiver: Object) => any} [get]
+ * @property {(target: Object, key: string, value: any, receiver: Object|undefined) => boolean} [set]
+ * @property {(target: Object, key: string) => boolean} [deleteProperty]
+ * @property {(target: Object, key: string) => string[]} [ownKeys]
+ * @property {(target: Object, key: string, prop: string | symbol) => PropertyDescriptor | undefined} [getOwnPropertyDescriptor]
+ */
+/**
+ * @see createDeepProxy
+ */
+declare class DeepProxyWrapExempt {
+    value: any;
+    /**
+     * @param {*} value
+     */
+    constructor(value: any);
+}
+/**
+ * Creates a deep Proxy that reports every property access as a dot-separated key
+ * (e.g. `"user.profile.name"`) to `handler`, nesting a proxy for each object.
+ * Symbol properties are prohibited (except the 15 ECMAScript built-in Symbols
+ * like `Symbol.iterator`, `Symbol.toPrimitive`, etc.). User-defined Symbols
+ * trigger a `console.assert` notice and are silently ignored — they never
+ * reach `handler`. This is by design: JSON storage cannot serialize Symbols.
  * @param {object} target
  * @param {DeepProxyHandler} handler
- * @param {readonly string[]} [currentPath=[]]
+ * @param {string} [currentKey=""]
  * @returns {*}
  */
-declare function createDeepProxy(target: object, handler: DeepProxyHandler, currentPath?: readonly string[]): any;
+declare function createDeepProxy(target: object, handler: DeepProxyHandler, currentKey?: string): any;
 declare class StorageInterface {
     scheduledUpdate: boolean | undefined;
     /**
@@ -32,10 +57,16 @@ declare class StorageInterface {
     /** @type {any} */
     _data: any;
     get data(): any;
-    /** @type {number|undefined} */
-    updateTimerID: number | undefined;
+    /** @type {ReturnType<typeof setTimeout>|undefined} */
+    updateTimerID: ReturnType<typeof setTimeout> | undefined;
     update(): Promise<void>;
 }
+/**
+ * A storage wrapper that buffers writes: mutations are flushed to `updator` at most
+ * once per `updateDelayMs` (default 100ms) after the last change. Reads always come
+ * from the in-memory cache (immediately visible); the raw backing store lags by up
+ * to `updateDelayMs`. Wait that long before asserting on the raw storage.
+ */
 declare class DebounceStorage extends StorageInterface {
     updator: (value: any) => Promise<void> | void;
     updateDelayMs: number;
@@ -60,27 +91,15 @@ declare class JSONDebounceStorage extends DebounceStorage {
     /**
      * @param {object} initialValue
      * @param {(value: Object)=>Promise<void>|void} updator
-     * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, path: readonly string[])=>void}} options
+     * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
      */
     constructor(initialValue: object, updator: (value: Object) => Promise<void> | void, { updateDelayMs, structuredCloneExempt, onSet }?: {
         updateDelayMs?: number;
         structuredCloneExempt?: boolean;
-        onSet?: (value: Object, path: readonly string[]) => void;
+        onSet?: (value: Object, key: string) => void;
     });
     /** @type {ReturnType<typeof createDeepProxy>} */
     _data: ReturnType<typeof createDeepProxy>;
-}
-export type StorageUpdater = (name: string, data: Object) => void;
-/** @deprecated */
-declare class JSONStorageAdaptor {
-    initialValueGetter: (name: string) => Promise<Object> | Object;
-    updater: StorageUpdater;
-    /**
-     * @typedef {(name: string, data: Object)=>void} StorageUpdater
-     * @param {(name: string)=>Promise<Object>|Object} initialValueGetter
-     * @param {StorageUpdater} updater
-     */
-    constructor(initialValueGetter: (name: string) => Promise<Object> | Object, updater: StorageUpdater);
 }
 export type FlatStorageAdapter = {
     get: (key: string) => Promise<any> | any;
@@ -97,8 +116,14 @@ declare class FlatJSONStorage extends StorageInterface {
     };
     /** @type {Map<string, any>} */
     cache: Map<string, any>;
+    /** @type {Map<string, string[]>} */
+    _splitCache: Map<string, string[]>;
+    /** @type {Map<string, Function>} */
+    _accessorCache: Map<string, Function>;
     /** @type {Map<string, JSONDebounceStorage>} */
     arrayDebouncers: Map<string, JSONDebounceStorage>;
+    /** @type {WeakMap<JSONDebounceStorage, DeepProxyWrapExempt>} */
+    _arrayWrappers: WeakMap<JSONDebounceStorage, DeepProxyWrapExempt>;
     /**
      * @type {DeepProxyHandler & { set: NonNullable<DeepProxyHandler["set"]>}}
      * @readonly
@@ -118,26 +143,25 @@ declare class FlatJSONStorage extends StorageInterface {
     /** @override */
     init(): Promise<void>;
     /**
-     * @param {readonly string[]} path
+     * @param {string} key
      */
-    _clearCache(path: readonly string[]): Promise<void>;
+    _clearCache(key: string): Promise<void>;
     /**
      * @param {string} [key=""]
      * @returns {string[]}
      */
     getSubKeys(key?: string): string[];
     /**
-     * @param {readonly string[]} path
+     * @param {string} key
      */
-    _deleteSchemaNode(path: readonly string[]): void;
-    /** @param {readonly string[]} path */
-    _getSchemaNode(path: readonly string[]): {
-        [k: string]: any;
-    } | undefined;
-    /** @deprecated */
-    getSchema(): {
-        [k: string]: any;
-    };
+    _deleteSchemaNode(key: string): void;
+    /** @param {string} key */
+    _getSchemaNode(key: string): any;
+    /**
+     * @param {string} key
+     * @returns {DeepProxyWrapExempt}
+     */
+    _getArrayWrapper(key: string): DeepProxyWrapExempt;
     /**
      * @param {string} key
      * @param {any[]} [initialArr]
@@ -149,10 +173,16 @@ declare class FlatJSONStorage extends StorageInterface {
      */
     _abortArrayDebouncer(key: string): void;
     /**
+     * Loads a key (or subtree) from the adapter into the cache, returning the value.
+     * Synchronous when the key is already cached (or the adapter is synchronous);
+     * returns a Promise otherwise. On an async adapter, reading `flat.data.<key>`
+     * after a cache miss throws `Key not loaded ... 'await load()'` — await this first.
      * @param {string} [key=""]
      */
     load(key?: string): any;
     /**
+     * Template-tag getter: `flat.get\`count\`` or `flat.get\`config.display.brightness\``.
+     * Always async — awaits `load()` and returns the value (array keys unwrap to the raw array).
      * @param {readonly string[]} strings
      * @param {readonly any[]} keys
      */
@@ -181,22 +211,15 @@ declare class FlatWebStorage extends FlatJSONStorage {
         instance: Storage;
     });
 }
-/** @deprecated */
-declare class StorageHelper {
-    updateDelayMs: number;
-    constructor(updateDelayMs?: number);
+declare class FlatUnstorage extends FlatJSONStorage {
     /**
-     * @deprecated
-     * @param {string} name
-     * @param {JSONStorageAdaptor} adaptor
-     * @returns {Promise<any>}
+     * @param {object} [options]
+     * @param {ReturnType<typeof import("unstorage").createStorage>} [options.storage] An unstorage instance.
+     * @param {string} [options.namespace]
      */
-    getStorage(name: string, adaptor: JSONStorageAdaptor): Promise<any>;
-    /** @deprecated */
-    static ADAPTORS: {
-        LOCAL_STORAGE: JSONStorageAdaptor;
-    };
+    constructor(options?: {
+        storage?: ReturnType<typeof import("unstorage").createStorage>;
+        namespace?: string;
+    });
 }
-export { 
-/** @deprecated */ JSONStorageAdaptor, 
-/** @deprecated */ JSONStorageAdaptor as StorageAdaptor, WebStorageItemStorage, StorageHelper, StorageInterface, FlatJSONStorage, FlatWebStorage };
+export { WebStorageItemStorage, StorageInterface, FlatJSONStorage, FlatWebStorage, FlatUnstorage };

@@ -4,17 +4,18 @@
 			"ESNext"
 		],
 		"target": "esnext",
-		"module": "esnext",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
 		"checkJs": true,
-		"emitDeclarationOnly": true,
+		"noEmit": true,
 		"strict": true,
-		"declaration": true,
 		"skipLibCheck": true,
 		"types": [
 			"node"
 		]
 	},
 	"include": [
-		"storage.js"
+		"storage.js",
+		"test.ts"
 	]
 }

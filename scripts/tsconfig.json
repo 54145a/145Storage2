@@ -1,0 +1,7 @@
+{
+	"extends": "../tsconfig.json",
+	"include": [
+		"buildDocs.ts",
+		"bench.js"
+	]
+}

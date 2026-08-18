@@ -1,4 +1,6 @@
 *lock*
+!pnpm-lock.yaml
 node_modules
+docs/dist
 test.db
 test.db*

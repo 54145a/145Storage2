@@ -35,6 +35,34 @@ settings.count += 1;
 
 ---
 
+## 🌍 Unstorage: Any KV Backend as a JSON Object
+
+`FlatUnstorage` adapts an [unstorage](https://unstorage.unjs.io/) instance into a `FlatJSONStorage`. This lets you treat **any** key-value backend — memory, filesystem, Redis, HTTP, Vercel KV, etc. — as a plain nested JSON object:
+
+```typescript
+import { FlatUnstorage } from "./storage.js";
+import { createStorage } from "unstorage";
+import fsDriver from "unstorage/drivers/fs-lite";
+// or memory: import memoryDriver from "unstorage/drivers/memory";
+
+const storage = createStorage({ driver: fsDriver({ base: "./data" }) });
+const flat = new FlatUnstorage({ storage });
+
+await flat.init();
+await flat.load("");          // unstorage is async: always await load() or use flat.get`...`
+
+flat.data.user = { name: "alice", prefs: { theme: "dark" } };
+flat.data.count = (flat.data.count ?? 0) + 1;
+```
+
+### ⚠️ Async & serialization caveats
+
+- **Always async**: unstorage's `getItem`/`setItem` are Promise-based, so direct synchronous reads after a cache miss throw (`Key not loaded ... requires 'await load()'`). Call `await flat.load("")` up front, or use the template-tag getter `await flat.get\`key\``.
+- **String round-trip**: unstorage's default serializer stores primitives via `String()` and parses with `destr`. String literals like `"{}"`, `"[]"`, `"0"`, `"true"`, `"null"` come back as their non-string types — avoid storing those exact strings through `FlatUnstorage`.
+- **Key normalization**: unstorage rewrites `/`, `\`, `?` and strips leading/trailing `:` in keys. Property names containing those characters will be remapped (and `a/b` collides with `a:b`).
+
+---
+
 ## 🧠 Under the Hood: Deep Proxy & Flat Schema
 
 How does the magic work?
@@ -51,6 +79,7 @@ This project is under active development, but the current version is stable and 
 - [x] Whole JSON Storage (`WebStorageItemStorage`)
 - [x] localStorage / sessionStorage adaptation
 - [x] Flat Storage Engine (`FlatJSONStorage` / `FlatWebStorage`)
+- [x] Any unstorage KV backend (`FlatUnstorage`)
 - [x] Smart debouncing for array operations
 - [x] Schema-based deep property traversal and loading
 - [x] Synchronous read flat storage
@@ -63,6 +92,16 @@ This is the initial roadmap. See Github issues for more incoming.
 ## 🤝 Contributing
 
 Issues, PRs, and suggestions are super welcome! Let's make state persistence elegant, together!
+
+## 🛠 Development
+
+Repo layout:
+
+- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
+- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and committed — rebuild, don't hand-edit.
+- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `test.ts` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
+- `test.ts` is the only test file (plain `node:assert` + console runner, no test framework).
+- `typedoc.json` builds the showcase site with **TypeDoc** (API docs from the `storage.js` JSDoc, this README as front page) — `buildDocs.ts` runs it via `pnpm site`, so `pnpm build` outputs `docs/dist` in one flow.
 
 ## 📚 Reference
 
