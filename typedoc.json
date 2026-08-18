@@ -9,5 +9,10 @@
 	"includeVersion": true,
 	"excludePrivate": true,
 	"excludeExternals": true,
-	"skipErrorChecking": true
+	"skipErrorChecking": true,
+	"githubPages": "https://github.com/54145a/145Storage2",
+	"navigationLinks": {
+		"GitHub": "https://github.com/54145a/145Storage2",
+		"npm": "https://www.npmjs.com/package/@54145a/storage2"
+	}
 }
