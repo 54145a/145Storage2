@@ -462,8 +462,10 @@ declare class DeepProxyWrapExempt {
 /**
  * Creates a deep Proxy that reports every property access as a dot-separated key
  * (e.g. `"user.profile.name"`) to `handler`, nesting a proxy for each object.
- * Symbol properties are NOT supported — they're ignored with a `console.assert`
- * notice and never reach `handler`.
+ * Symbol properties are prohibited (except the 15 ECMAScript built-in Symbols
+ * like `Symbol.iterator`, `Symbol.toPrimitive`, etc.). User-defined Symbols
+ * trigger a `console.assert` notice and are silently ignored — they never
+ * reach `handler`. This is by design: JSON storage cannot serialize Symbols.
  * @param {object} target
  * @param {DeepProxyHandler} handler
  * @param {string} [currentKey=""]
