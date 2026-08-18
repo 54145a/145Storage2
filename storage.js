@@ -598,6 +598,7 @@ class FlatJSONStorage extends StorageInterface {
 		if (isSchemaLeafNode(node)) {
 			return [key];
 		}
+		if (!isPlainObject(node)) return [];
 		/** @type {string[]} */
 		const keys = [];
 		/**

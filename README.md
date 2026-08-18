@@ -202,6 +202,17 @@ await test("getSubKeys should list child keys", async () => {
   assert.ok(keys.includes("gamma"), `Expected 'gamma' in subkeys, got: [${keys}]`);
 });
 
+await test("getSubKeys on empty FLAT_LINK should return [] not string indices", async () => {
+  clearLocalStorage();
+  const flat = new FlatWebStorage({ namespace: "t_emptylink", instance: localStorage });
+  await flat.init();
+  await flat.load("");
+  flat.data.config = {};
+  await new Promise((r) => setTimeout(r, 150));
+  const keys = flat.getSubKeys("config");
+  assert.deepEqual(keys, [], `Expected empty subkeys for empty FLAT_LINK, got: [${keys}]`);
+});
+
 await test("nested object deep set should auto-persist leaf", async () => {
   clearLocalStorage();
   const flat = new FlatWebStorage({ namespace: "t_deep", instance: localStorage });

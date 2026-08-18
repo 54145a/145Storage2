@@ -33,15 +33,11 @@ bench("nested read  d.config.display.brightness", () => {
 bench("shallow read d.arr", () => {
   const x = d.arr;
 });
-bench("shallow read via get`key`", async () => {
-  await storage.get`config.display.brightness`;
-}, 5000);
-bench("shallow write d.count = i", (i = 0) => {
-  d.count = i;
+bench("shallow write d.count = i", () => {
+  d.count = 1;
 }, 50000);
 
 // enumeration-heavy ops (hit ownKeys + getOwnPropertyDescriptor traps)
-const raw = await storage.load("");
 bench("Object.keys(proxy)", () => {
   Object.keys(d);
 }, 50000);
