@@ -460,9 +460,6 @@ class FlatJSONStorage extends StorageInterface {
 			},
 			set: (target, key, value) => {
 				assertIsJSONStorageStorableValue(value, "flat key:", key);
-				if (key.includes(".")) {
-					console.warn(`[FlatJSONStorage] Key "${key}" contains ".", which is the path separator. Nested objects should be set as a whole, not via dotted keys.`);
-				}
 
 				const oldSchemaNode = this._getSchemaNode(key);
 				const oldNodeType = getSchemaNodeValueType(oldSchemaNode);
@@ -859,11 +856,11 @@ class FlatWebStorage extends FlatJSONStorage {
 }
 class FlatUnstorage extends FlatJSONStorage {
 	/** 
-	 * @param {object} options 
-	 * @param {ReturnType<typeof import("unstorage").createStorage>} options.storage An unstorage instance.
+	 * @param {object} [options] 
+	 * @param {ReturnType<typeof import("unstorage").createStorage>} [options.storage] An unstorage instance.
 	 * @param {string} [options.namespace] 
 	 */
-	constructor(options) {
+	constructor(options = {}) {
 		const { storage, namespace } = options;
 		if (!storage) throw new TypeError("'storage' is required for FlatUnstorage.");
 		/** @type {FlatStorageAdapter} */

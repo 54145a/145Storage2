@@ -211,12 +211,12 @@ declare class FlatWebStorage extends FlatJSONStorage {
 }
 declare class FlatUnstorage extends FlatJSONStorage {
     /**
-     * @param {object} options
-     * @param {ReturnType<typeof import("unstorage").createStorage>} options.storage An unstorage instance.
+     * @param {object} [options]
+     * @param {ReturnType<typeof import("unstorage").createStorage>} [options.storage] An unstorage instance.
      * @param {string} [options.namespace]
      */
-    constructor(options: {
-        storage: ReturnType<typeof import("unstorage").createStorage>;
+    constructor(options?: {
+        storage?: ReturnType<typeof import("unstorage").createStorage>;
         namespace?: string;
     });
 }
