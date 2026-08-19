@@ -1,7 +1,7 @@
 {
 	"name": "@54145a/storage2",
 	"version": "0.6.0",
-	"description": "My localStorage is a Javascript object.",
+	"description": "A JavaScript storage library that uses property accessor syntax, making state persistence as simple as modifying a plain object.",
 	"scripts": {
 		"test": "node --experimental-webstorage --localstorage-file=test.db test.ts",
 		"build": "tsc && tsc -p scripts/tsconfig.json && tsc -p tsconfig.build.json && node scripts/buildDocs.ts",
@@ -22,7 +22,9 @@
 		"localStorage",
 		"sessionStorage",
 		"Web Storage",
-		"unstorage"
+		"unstorage",
+		"proxy",
+		"reactive"
 	],
 	"author": "54145a",
 	"license": "AGPL-3.0-only",
