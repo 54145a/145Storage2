@@ -86,6 +86,39 @@ await test("should persist nested object modifications", async () => {
   assert.equal(raw.user.prefs.theme, "dark");
 });
 
+await test("should persist deep mutations on later-assigned nested objects", async () => {
+  clearLocalStorage();
+  const storage = new WebStorageItemStorage("test_deep_late", localStorage);
+  storage.data.user = { profile: { theme: "dark" }, tags: ["a"] };
+  // Deep leaf write and array mutation through the later-assigned object must
+  // go through the traps (regression: inner values were left unwrapped).
+  storage.data.user.profile.theme = "light";
+  storage.data.user.tags.push("b");
+  await new Promise((r) => setTimeout(r, 150));
+  const raw = JSON.parse(localStorage.getItem("test_deep_late") || "{}");
+  assert.equal(raw.user.profile.theme, "light");
+  assert.deepEqual(raw.user.tags, ["a", "b"]);
+});
+
+await test("reusing a proxied object must not re-wrap it (no proxy-of-proxy)", async () => {
+  clearLocalStorage();
+  const storage = new WebStorageItemStorage("test_reuse", localStorage);
+  const shared = { profile: { name: "x" } };
+  storage.data.a = shared;
+  // Re-inserting a reference to the same (already-proxied) object and reading
+  // back a proxied nested value must yield the SAME proxies — not a fresh
+  // wrapper layer around a wrapper (regression: _eagerWrap had no guard).
+  storage.data.b = { z: shared };
+  storage.data.c = { p: storage.data.a.profile };
+  assert.equal(storage.data.a, storage.data.b.z);
+  assert.equal(storage.data.a.profile, storage.data.c.p);
+  await new Promise((r) => setTimeout(r, 150));
+  const raw = JSON.parse(localStorage.getItem("test_reuse") || "{}");
+  assert.equal(raw.a.profile.name, "x");
+  assert.equal(raw.b.z.profile.name, "x");
+  assert.equal(raw.c.p.name, "x");
+});
+
 await test("should handle delete property", async () => {
   clearLocalStorage();
   const storage = new WebStorageItemStorage("test_delete", localStorage);
@@ -98,6 +131,7 @@ await test("should handle delete property", async () => {
   assert.equal(raw.a, undefined);
   assert.equal(raw.b, 2);
 });
+
 // #endregion
 
 // #region FlatWebStorage Tests
@@ -450,7 +484,7 @@ export type DeepProxyHandler = {
  * @property {(target: Object, key: string, prop: string | symbol) => PropertyDescriptor | undefined} [getOwnPropertyDescriptor]
  */
 /**
- * @see createDeepProxy
+ * @see createFullDeepProxy
  */
 declare class DeepProxyWrapExempt {
     value: any;
@@ -460,18 +494,19 @@ declare class DeepProxyWrapExempt {
     constructor(value: any);
 }
 /**
- * Creates a deep Proxy that reports every property access as a dot-separated key
- * (e.g. `"user.profile.name"`) to `handler`, nesting a proxy for each object.
- * Symbol properties are prohibited (except the 15 ECMAScript built-in Symbols
- * like `Symbol.iterator`, `Symbol.toPrimitive`, etc.). User-defined Symbols
- * trigger a `console.assert` notice and are silently ignored — they never
- * reach `handler`. This is by design: JSON storage cannot serialize Symbols.
+ * The lightweight deep proxy: only the traps a JSON cache actually needs
+ * (`set`, `deleteProperty`). No path tracking, no get trap, no pass-through
+ * `has` / `ownKeys` / `getOwnPropertyDescriptor` traps — those fall back to
+ * V8's native default path, keeping key enumeration and spread fast. Every
+ * reachable nested value must already be wrapped by the caller (`_eagerWrap`)
+ * so reads are pure native property access through the proxy boundary.
+ * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
+ * {@link createFullDeepProxy}.
  * @param {object} target
  * @param {DeepProxyHandler} handler
- * @param {string} [currentKey=""]
  * @returns {*}
  */
-declare function createDeepProxy(target: object, handler: DeepProxyHandler, currentKey?: string): any;
+declare function createLightDeepProxy(target: object, handler: DeepProxyHandler): any;
 declare class StorageInterface {
     scheduledUpdate: boolean | undefined;
     /**
@@ -504,7 +539,11 @@ declare class DebounceStorage extends StorageInterface {
      * @param {Exclude<any, undefined>} initialValue
      * @param {(value: any)=>Promise<void>|void} updator
      * @param {number} updateDelayMs
-     * @param {boolean} structuredCloneExempt Use raw initialValue as cache. DO NOT MODIFY THE OBJECT EVER IF YOU ENABLE THIS.
+     * @param {boolean} structuredCloneExempt When `true`, the user guarantees they
+     * will not modify `initialValue` after construction, so the cache holds the
+     * original object directly (no clone). Without this flag (the default), the
+     * user may freely modify their object, so we `structuredClone` it to keep
+     * an isolated private cache. Eager proxy wrapping is always applied regardless.
      */
     constructor(initialValue: Exclude<any, undefined>, updator: (value: any) => Promise<void> | void, updateDelayMs?: number, structuredCloneExempt?: boolean);
     /** @returns {Promise<void>|void} */
@@ -517,19 +556,34 @@ declare class DebounceStorage extends StorageInterface {
     update(): Promise<void>;
     requestUpdate(): void;
 }
+/**
+ * @extends {DebounceStorage}
+ */
 declare class JSONDebounceStorage extends DebounceStorage {
     /**
      * @param {object} initialValue
      * @param {(value: Object)=>Promise<void>|void} updator
      * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
+     * `onSet` is called with the assigned value and the leaf property name
+     * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
+     * It fires only when the value actually changes — identical-value
+     * assignments are short-circuited before reaching `onSet`.
      */
     constructor(initialValue: object, updator: (value: Object) => Promise<void> | void, { updateDelayMs, structuredCloneExempt, onSet }?: {
         updateDelayMs?: number;
         structuredCloneExempt?: boolean;
         onSet?: (value: Object, key: string) => void;
     });
-    /** @type {ReturnType<typeof createDeepProxy>} */
-    _data: ReturnType<typeof createDeepProxy>;
+    /**
+     * Recursively replace every nested JSON object/array in `obj` with its
+     * light proxy, so that all values reachable from the cache are already
+     * wrapped and reads need no `get` trap.
+     * @param {Record<string, any>} obj
+     * @param {DeepProxyHandler} handler
+     */
+    static _eagerWrap(obj: Record<string, any>, handler: DeepProxyHandler): void;
+    /** @type {ReturnType<typeof createLightDeepProxy>} */
+    _data: ReturnType<typeof createLightDeepProxy>;
 }
 export type FlatStorageAdapter = {
     get: (key: string) => Promise<any> | any;
@@ -622,6 +676,9 @@ declare class FlatJSONStorage extends StorageInterface {
      */
     delete(key?: string): Promise<void>;
 }
+/**
+ * @extends {JSONDebounceStorage}
+ */
 declare class WebStorageItemStorage extends JSONDebounceStorage {
     /**
      * @param {string} itemName

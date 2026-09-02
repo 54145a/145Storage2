@@ -19,7 +19,11 @@ class ProxyCacheEntry {
 	}
 }
 /** @type {WeakMap<object, ProxyCacheEntry>} */
-const deepProxyCache = new WeakMap();
+const lightDeepProxyCache = new WeakMap();
+/** @type {WeakMap<object, ProxyCacheEntry>} */
+const fullDeepProxyCache = new WeakMap();
+/** @type {WeakSet<object>} */
+const knownDeepProxies = new WeakSet();
 
 /** 
  * @typedef {object} DeepProxyHandler 
@@ -32,7 +36,7 @@ const deepProxyCache = new WeakMap();
  */
 
 /** 
- * @see createDeepProxy 
+ * @see createFullDeepProxy 
  */
 class DeepProxyWrapExempt {
 	/** 
@@ -52,86 +56,116 @@ for (const key of Object.getOwnPropertyNames(Symbol)) {
 	try {
 		const val = /** @type {any} */ (Symbol)[key];
 		if (typeof val === "symbol") builtInSymbols.add(val);
-	} catch {}
+	} catch { }
 }
 for (const key of Object.getOwnPropertyNames(Symbol.prototype)) {
 	try {
 		const val = /** @type {any} */ (Symbol.prototype)[key];
 		if (typeof val === "symbol") builtInSymbols.add(val);
-	} catch {}
+	} catch { }
 }
 
 const assertSymbol = (/** @type {string|symbol} */ prop) => {
 	if (typeof prop === "symbol" && !builtInSymbols.has(prop)) {
 		console.assert(false,
 			`Symbol("${Symbol.keyFor(prop) || prop.description}") is not a built-in Symbol ` +
-			`and is not supported by createDeepProxy. ` +
+			`and is not supported by createFullDeepProxy. ` +
 			`JSON storage cannot serialize Symbol properties.`
 		);
 	}
 };
 /**
- * Creates a deep Proxy that reports every property access as a dot-separated key
- * (e.g. `"user.profile.name"`) to `handler`, nesting a proxy for each object.
- * Symbol properties are prohibited (except the 15 ECMAScript built-in Symbols
- * like `Symbol.iterator`, `Symbol.toPrimitive`, etc.). User-defined Symbols
- * trigger a `console.assert` notice and are silently ignored — they never
- * reach `handler`. This is by design: JSON storage cannot serialize Symbols.
+ * The lightweight deep proxy: only the traps a JSON cache actually needs
+ * (`set`, `deleteProperty`). No path tracking, no get trap, no pass-through
+ * `has` / `ownKeys` / `getOwnPropertyDescriptor` traps — those fall back to
+ * V8's native default path, keeping key enumeration and spread fast. Every
+ * reachable nested value must already be wrapped by the caller (`_eagerWrap`)
+ * so reads are pure native property access through the proxy boundary.
+ * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
+ * {@link createFullDeepProxy}.
+ * @param {object} target
+ * @param {DeepProxyHandler} handler
+ * @returns {*}
+ */
+function createLightDeepProxy(target, handler) {
+	const cacheEntry = lightDeepProxyCache.get(target);
+	if (cacheEntry && cacheEntry.handler === handler) {
+		return cacheEntry.proxy;
+	}
+	const proxy = new Proxy(target, {
+		set(obj, prop, value, receiver) {
+			if (handler.set) return handler.set(obj, /** @type {string} */(prop), value, receiver);
+			return Reflect.set(obj, prop, value, receiver);
+		},
+		deleteProperty(obj, prop) {
+			if (handler.deleteProperty) return handler.deleteProperty(obj, /** @type {string} */(prop));
+			return Reflect.deleteProperty(obj, prop);
+		}
+	});
+	knownDeepProxies.add(proxy);
+	lightDeepProxyCache.set(target, new ProxyCacheEntry(proxy, "", handler));
+	return proxy;
+}
+/**
+ * The full-featured deep proxy: reports every property access as a
+ * dot-separated key (e.g. `"user.profile.name"`) to `handler` and implements
+ * every trap (`has` / `ownKeys` / `getOwnPropertyDescriptor` included) so
+ * schema-driven virtual keys work — this is what `FlatJSONStorage` runs on.
+ * For the minimal fast path used by `JSONDebounceStorage` see
+ * {@link createLightDeepProxy}. Symbol properties are prohibited (except the
+ * 15 ECMAScript built-in Symbols like `Symbol.iterator`, `Symbol.toPrimitive`,
+ * etc.). User-defined Symbols trigger a `console.assert` notice and are
+ * silently ignored — they never reach `handler`. This is by design: JSON
+ * storage cannot serialize Symbols.
  * @param {object} target
  * @param {DeepProxyHandler} handler
  * @param {string} [currentKey=""]
  * @returns {*}
  */
-function createDeepProxy(target, handler, currentKey = "") {
-	const cacheEntry = deepProxyCache.get(target);
+function createFullDeepProxy(target, handler, currentKey = "") {
+	const cacheEntry = fullDeepProxyCache.get(target);
 	if (cacheEntry) {
 		if (cacheEntry.handler === handler && cacheEntry.firstKey === currentKey) {
 			return cacheEntry.proxy;
 		}
 		console.warn(
-			"[createDeepProxy] Same object with different context. Overwriting cache.",
+			"[createFullDeepProxy] Same object with different context. Overwriting cache.",
 			"Old handler/key:", cacheEntry.handler, cacheEntry.firstKey,
 			"New handler/key:", handler, currentKey
 		);
 	}
 	const proxy = new Proxy(target, {
 		has(target, prop) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
-			if (handler.has) return handler.has(target, key);
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.has(target, prop); }
+			if (handler.has) return handler.has(target, currentKey === "" ? prop : currentKey + "." + prop);
 			return Reflect.has(target, prop);
 		},
 		get(obj, prop, receiver) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.get(obj, prop, receiver); }
+			const key = currentKey === "" ? prop : currentKey + "." + prop;
 			if (handler.get) {
 				const result = handler.get(obj, key, receiver);
 				if (result instanceof DeepProxyWrapExempt) return result.value;
 				if (typeof result === "object" && result !== null && typeof result !== "function") {
-					return createDeepProxy(result, handler, key);
+					return createFullDeepProxy(result, handler, key);
 				}
 				return result;
 			}
 			const value = Reflect.get(obj, prop, receiver);
 			if (typeof value === "object" && value !== null && typeof value !== "function") {
-				return createDeepProxy(value, handler, key);
+				return createFullDeepProxy(value, handler, key);
 			}
 			return value;
 		},
 		set(obj, prop, value, receiver) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.set(obj, prop, value, receiver); }
+			const key = currentKey === "" ? prop : currentKey + "." + prop;
 			if (handler.set) return handler.set(obj, key, value, receiver);
 			return Reflect.set(obj, prop, value, receiver);
 		},
 		deleteProperty(obj, prop) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
-			if (handler.deleteProperty) return handler.deleteProperty(obj, key);
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.deleteProperty(obj, prop); }
+			if (handler.deleteProperty) return handler.deleteProperty(obj, currentKey === "" ? prop : currentKey + "." + prop);
 			return Reflect.deleteProperty(obj, prop);
 		},
 		ownKeys(target) {
@@ -139,14 +173,12 @@ function createDeepProxy(target, handler, currentKey = "") {
 			return Reflect.ownKeys(target);
 		},
 		getOwnPropertyDescriptor(target, prop) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
-			if (handler.getOwnPropertyDescriptor) return handler.getOwnPropertyDescriptor(target, key, prop);
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.getOwnPropertyDescriptor(target, prop); }
+			if (handler.getOwnPropertyDescriptor) return handler.getOwnPropertyDescriptor(target, currentKey === "" ? prop : currentKey + "." + prop, prop);
 			return Reflect.getOwnPropertyDescriptor(target, prop);
 		}
 	});
-	deepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
+	fullDeepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
 	return proxy;
 }
 
@@ -207,7 +239,11 @@ class DebounceStorage extends StorageInterface {
 	 * @param {Exclude<any, undefined>} initialValue 
 	 * @param {(value: any)=>Promise<void>|void} updator 
 	 * @param {number} updateDelayMs 
-	 * @param {boolean} structuredCloneExempt Use raw initialValue as cache. DO NOT MODIFY THE OBJECT EVER IF YOU ENABLE THIS.
+	 * @param {boolean} structuredCloneExempt When `true`, the user guarantees they
+	 * will not modify `initialValue` after construction, so the cache holds the
+	 * original object directly (no clone). Without this flag (the default), the
+	 * user may freely modify their object, so we `structuredClone` it to keep
+	 * an isolated private cache. Eager proxy wrapping is always applied regardless.
 	 */
 	constructor(initialValue, updator, updateDelayMs = 100, structuredCloneExempt = false) {
 		super();
@@ -314,31 +350,90 @@ function assertIsFlatJSONStorageStorableArray(array, ...info) {
 		throw new TypeError("Non-primitive array.");
 	}
 }
+/**
+ * @extends {DebounceStorage}
+ */
 class JSONDebounceStorage extends DebounceStorage {
 	/** 
 	 * @param {object} initialValue
 	 * @param {(value: Object)=>Promise<void>|void} updator
 	 * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
+	 * `onSet` is called with the assigned value and the leaf property name
+	 * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
+	 * It fires only when the value actually changes — identical-value
+	 * assignments are short-circuited before reaching `onSet`.
 	 */
 	constructor(initialValue, updator, { updateDelayMs, structuredCloneExempt, onSet = () => { } } = {}) {
 		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
-		this._data = createDeepProxy(this._cache, {
-			set: (target, key, value, receiver) => {
+		// --- Eager wrapping (always active) ---
+		// Every reachable nested JSON object/array in the cache is replaced
+		// with a light proxy (Valtio-style). The data proxy therefore needs
+		// no `get` trap: reads are pure native property access through the
+		// proxy boundary. This works even for structuredCloneExempt mode
+		// because the proxy is transparent — reads from the user's own
+		// reference behave identically to plain-object reads.
+		const handler = {
+			/**
+			 * @param {object} target
+			 * @param {string} prop
+			 * @param {*} value
+			 * @param {object|undefined} receiver
+			 */
+			set: (target, prop, value, receiver) => {
+				if (Object.hasOwn(target, /** @type {string} */(prop)) && Object.is((/** @type {Record<string|symbol, any>} */ (target))[/** @type {string} */ (prop)], value)) return true;
 				assertIsJSONStorageStorableValue(value);
-				onSet(value, key);
+				onSet(value, prop);
 				this.requestUpdate();
-				const prop = key.slice(key.lastIndexOf(".") + 1);
-				return Reflect.set(target, prop, value, Array.isArray(target) ? target : receiver);
+				return Reflect.set(target, prop, toStoredValue(value), Array.isArray(target) ? target : receiver);
 			},
-			deleteProperty: (target, key) => {
+			/**
+			 * @param {object} target
+			 * @param {string} prop
+			 */
+			deleteProperty: (target, prop) => {
 				this.requestUpdate();
-				const prop = key.slice(key.lastIndexOf(".") + 1);
 				return Reflect.deleteProperty(target, prop);
 			}
-		});
+		};
+		/**
+		 * JSON object/array values are stored wrapped in light proxies, so
+		 * reads need no `get` trap. Already-wrapped values pass through.
+		 * The assigned value's OWN nested objects/arrays are recursively
+		 * wrapped too — otherwise reads would return raw inner values whose
+		 * mutations bypass every trap (and persistence).
+		 * @param {*} value
+		 * @returns {*}
+		 */
+		function toStoredValue(value) {
+			if (value === null || typeof value !== "object" || !(Array.isArray(value) || isPlainObject(value))) {
+				return value;
+			}
+			if (knownDeepProxies.has(value)) return value;
+			const proxy = createLightDeepProxy(value, handler);
+			JSONDebounceStorage._eagerWrap(value, handler);
+			return proxy;
+		}
+		this._data = createLightDeepProxy(this._cache, handler);
+		JSONDebounceStorage._eagerWrap(this._cache, handler);
 		this.init();
 	}
-	/** @type {ReturnType<typeof createDeepProxy>} */
+	/**
+	 * Recursively replace every nested JSON object/array in `obj` with its
+	 * light proxy, so that all values reachable from the cache are already
+	 * wrapped and reads need no `get` trap.
+	 * @param {Record<string, any>} obj
+	 * @param {DeepProxyHandler} handler
+	 */
+	static _eagerWrap(obj, handler) {
+		for (const key of Object.keys(obj)) {
+			const val = obj[key];
+			if (val !== null && typeof val === "object" && !knownDeepProxies.has(val) && (Array.isArray(val) || isPlainObject(val))) {
+				obj[key] = createLightDeepProxy(val, handler);
+				JSONDebounceStorage._eagerWrap(val, handler);
+			}
+		}
+	}
+	/** @type {ReturnType<typeof createLightDeepProxy>} */
 	_data;
 }
 
@@ -561,7 +656,7 @@ class FlatJSONStorage extends StorageInterface {
 			}
 		}
 
-		this._data = createDeepProxy({}, this._handler);
+		this._data = createFullDeepProxy({}, this._handler);
 	}
 
 	/** @override */
@@ -827,6 +922,9 @@ class FlatJSONStorage extends StorageInterface {
 }
 //#endregion
 //#region
+/**
+ * @extends {JSONDebounceStorage}
+ */
 class WebStorageItemStorage extends JSONDebounceStorage {
 	/** 
 	 * @param {string} itemName 

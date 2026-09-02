@@ -31,10 +31,10 @@
 	"publishConfig": {
 		"access": "public"
 	},
-	"dependencies": {},
 	"devDependencies": {
 		"@types/node": "^26.2.0",
 		"typescript": "^7.0.2",
-		"unstorage": "^1.17.5"
+		"unstorage": "^1.17.5",
+		"valtio": "^2.3.2"
 	}
 }

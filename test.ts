@@ -54,6 +54,39 @@ await test("should persist nested object modifications", async () => {
   assert.equal(raw.user.prefs.theme, "dark");
 });
 
+await test("should persist deep mutations on later-assigned nested objects", async () => {
+  clearLocalStorage();
+  const storage = new WebStorageItemStorage("test_deep_late", localStorage);
+  storage.data.user = { profile: { theme: "dark" }, tags: ["a"] };
+  // Deep leaf write and array mutation through the later-assigned object must
+  // go through the traps (regression: inner values were left unwrapped).
+  storage.data.user.profile.theme = "light";
+  storage.data.user.tags.push("b");
+  await new Promise((r) => setTimeout(r, 150));
+  const raw = JSON.parse(localStorage.getItem("test_deep_late") || "{}");
+  assert.equal(raw.user.profile.theme, "light");
+  assert.deepEqual(raw.user.tags, ["a", "b"]);
+});
+
+await test("reusing a proxied object must not re-wrap it (no proxy-of-proxy)", async () => {
+  clearLocalStorage();
+  const storage = new WebStorageItemStorage("test_reuse", localStorage);
+  const shared = { profile: { name: "x" } };
+  storage.data.a = shared;
+  // Re-inserting a reference to the same (already-proxied) object and reading
+  // back a proxied nested value must yield the SAME proxies — not a fresh
+  // wrapper layer around a wrapper (regression: _eagerWrap had no guard).
+  storage.data.b = { z: shared };
+  storage.data.c = { p: storage.data.a.profile };
+  assert.equal(storage.data.a, storage.data.b.z);
+  assert.equal(storage.data.a.profile, storage.data.c.p);
+  await new Promise((r) => setTimeout(r, 150));
+  const raw = JSON.parse(localStorage.getItem("test_reuse") || "{}");
+  assert.equal(raw.a.profile.name, "x");
+  assert.equal(raw.b.z.profile.name, "x");
+  assert.equal(raw.c.p.name, "x");
+});
+
 await test("should handle delete property", async () => {
   clearLocalStorage();
   const storage = new WebStorageItemStorage("test_delete", localStorage);
@@ -66,6 +99,7 @@ await test("should handle delete property", async () => {
   assert.equal(raw.a, undefined);
   assert.equal(raw.b, 2);
 });
+
 // #endregion
 
 // #region FlatWebStorage Tests
@@ -321,3 +355,4 @@ await test("unstorage: requires storage or driver", () => {
 // #region Done
 console.info("\n🎉 All tests passed!");
 // #endregion
+
