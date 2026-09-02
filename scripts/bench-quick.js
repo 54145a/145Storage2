@@ -124,13 +124,14 @@ console.log("\n\n============================================================");
 console.log("  Flat Capability Advantages (Debounce/Valtio cannot do these)");
 console.log("============================================================");
 
-// --- 1. Read: 1 key (Flat) vs entire dataset (Debounce) ---
+// --- 1. Read: 1 key (Flat) vs entire dataset (Debounce/Valtio) ---
 {
   const PARTIAL_N = 100;
   const partialMem = createStorage({ driver: memory() });
   const partialWstMem = createStorage({ driver: memory() });
+  const partialVpMem = createStorage({ driver: memory() });
 
-  // Pre-populate both with the same 100-key dataset
+  // Pre-populate all three with the same 100-key dataset
   const largeObj = {};
   for (let i = 0; i < PARTIAL_N; i++) {
     const v = { v: i, tags: ["a","b","c"], nested: { x: i } };
@@ -138,8 +139,9 @@ console.log("============================================================");
     await partialMem.setItem(`k${i}`, JSON.stringify(v));  // Flat: one KV per key
   }
   await partialWstMem.setItem("data", JSON.stringify(largeObj)); // Debounce: one big blob
+  await partialVpMem.setItem("vp", JSON.stringify(largeObj));   // Valtio+persist: one big blob
 
-  console.log("\n--- 1. Read: 1 key (Flat) vs entire dataset (Debounce) ---");
+  console.log("\n--- 1. Read: 1 key (Flat) vs entire blob (Debounce/Valtio) ---");
   // Flat: adapter reads ONE small item
   bench("[Flat]  adapter.getItem (1 key)", async () => {
     await partialMem.getItem("k50");
@@ -147,6 +149,10 @@ console.log("============================================================");
   // Debounce: adapter reads ONE large blob containing all 100 keys
   bench("[Debounce] adapter.getItem (1 big blob)", async () => {
     await partialWstMem.getItem("data");
+  }, 5000);
+  // Valtio+persist: same blob model — reads entire blob even for 1 key
+  bench("[Valtio+persist] adapter.getItem (1 big blob)", async () => {
+    await partialVpMem.getItem("vp");
   }, 5000);
 
   console.log("\n--- 2. Full Dataset Read: all 100 keys ---");
@@ -164,11 +170,10 @@ console.log("============================================================");
   const debounceFullReadTime = (performance.now() - debounceFullReadStart);
   console.log(`  [Debounce] 100 full-blob reads:     ${debounceFullReadTime.toFixed(0).padStart(8)} ms`);
 
-  console.log("\n  Note: Flat reads are individual async calls per key.");
-  console.log("  Debounce reads the entire blob in one call.");
-  console.log("  For partial reads (1 key), Flat is 5.7× faster (842 ns vs 4837 ns).");
-  console.log("  For full reads, Debounce is faster (single bulk read).");
-  console.log("  The advantage grows as you need fewer keys from a large dataset.");
+  console.log("\n  For partial reads (1 key), Flat reads only that key —");
+  console.log("  Debounce/Valtio+persist must read the ENTIRE blob, even for 1 key.");
+  console.log("  For full reads, blob wins (single bulk read).");
+  console.log("  Flat's advantage scales with dataset size and adapter latency.");
 }
 
 // --- 3. Immediate Persistence (Flat) vs Debounced Flush (Debounce) ---
