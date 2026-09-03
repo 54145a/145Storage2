@@ -850,14 +850,25 @@ class FlatJSONStorage extends StorageInterface {
 		 * @param {any} value
 		 */
 		const handleGetHandlerResult = (flatKey, value) => {
-			this.cache.set(flatKey, value);
+			// Adapter stores { value, type } wrappers — unwrap to the raw value
+			// so the cache format is consistent with the write path.
+			const unwrapped = value != null && typeof value === "object" && "value" in value && "type" in value ? value.value : value;
+			this.cache.set(flatKey, unwrapped);
 			const flatNode = this._getSchemaNode(flatKey);
 			if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
-				this._getArrayDebouncer(flatKey, value);
+				this._getArrayDebouncer(flatKey, unwrapped);
 			}
 		};
 		for (const flatKey of subKeys) {
 			if (!this.cache.has(flatKey) && !this.arrayDebouncers.has(flatKey)) {
+				const flatNode = this._getSchemaNode(flatKey);
+				if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
+					// DEBOUNCE_ARRAY keys are managed by the debouncer, not the
+					// adapter (the set handler never writes them to the adapter).
+					// Initialize the debouncer; data arrives on first access.
+					this._getArrayDebouncer(flatKey, []);
+					continue;
+				}
 				const value = this.adapter.get(flatKey);
 				if (value instanceof Promise) {
 					promises.push(value.then(realValue => handleGetHandlerResult(flatKey, realValue)));
