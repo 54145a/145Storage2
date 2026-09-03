@@ -1,64 +1,43 @@
-// bench-quick.js: Cold start + nested read — the one metric that matters
-// For data of size X, measure: time from "nothing" to "reading a deep nested value"
+// bench-quick.js: Cold start + nested read using real localStorage
+// Run: node --experimental-webstorage --localstorage-file=/tmp/bench.db scripts/bench-quick.js
 import { proxy } from "valtio/vanilla";
 import { FlatWebStorage, WebStorageItemStorage } from "../storage.js";
 
-function makeSyncAdapter(store) {
-  return {
-    getItem: (key) => store[key] ?? null,
-    setItem: (key, value) => { store[key] = value; },
-    removeItem: (key) => { delete store[key]; },
-  };
+const ls = globalThis.localStorage;
+
+function populateFlat(ns, data) {
+  const keys = Object.keys(data);
+  ls.clear();
+  const f = new FlatWebStorage({ instance: ls, namespace: ns });
+  return f.init().then(() => f.load("")).then(async () => {
+    for (const k of keys) f.data[k] = data[k];
+    await new Promise(r => setTimeout(r, 200));
+  });
 }
 
-async function measureColdRead(data) {
+async function measureColdRead(ns, debounceKey, data) {
   const keys = Object.keys(data);
-  const JSONBlob = JSON.stringify(data);
 
-  // Pre-populate Flat: build schema via API (NOT measured)
-  const flatRaw = {};
-  const flatPrep = new FlatWebStorage({ instance: makeSyncAdapter(flatRaw), namespace: "mb" });
-  await flatPrep.init(); await flatPrep.load("");
-  for (const k of keys) flatPrep.data[k] = data[k];
-  await new Promise(r => setTimeout(r, 200)); // schema flush
-
-  // Flat full: reconstruct + load("") (loads all keys)
-  const tFlat0 = performance.now();
-  const f = new FlatWebStorage({ instance: makeSyncAdapter(flatRaw), namespace: "mb" });
-  await f.init(); await f.load("");
+  // Flat: reconstruct + load(keys[0]) — partial load, reads 1 key
+  const t0 = performance.now();
+  const f = new FlatWebStorage({ instance: ls, namespace: ns });
+  await f.init();
+  await f.load(keys[0]);
   void f.data[keys[0]].nested.deep.value;
-  const flatMs = performance.now() - tFlat0;
+  const flatT = performance.now() - t0;
 
-  // Flat partial: reconstruct + load(keys[0]) (loads only 1 key)
-  const tFlatP = performance.now();
-  const fp = new FlatWebStorage({ instance: makeSyncAdapter(flatRaw), namespace: "mb" });
-  await fp.init(); await fp.load(keys[0]);
-  void fp.data[keys[0]].nested.deep.value;
-  const flatPartialMs = performance.now() - tFlatP;
-
-  // Debounce: pre-populate blob, then construct + read
-  const debRaw = {};
-  debRaw["d"] = JSONBlob;
-  const debAdapter = makeSyncAdapter(debRaw);
-
-  const tDeb0 = performance.now();
-  const d = new WebStorageItemStorage("d", debAdapter, 200000);
+  // Debounce: construct (loads entire blob at construction)
+  const t1 = performance.now();
+  const d = new WebStorageItemStorage(debounceKey, ls, 200000);
   await d.init();
   void d.data[keys[0]].nested.deep.value;
-  const debMs = performance.now() - tDeb0;
+  const debT = performance.now() - t1;
 
-  // Valtio: proxy creation + eager init + read
-  const tVp0 = performance.now();
-  const p = proxy(JSON.parse(JSONBlob));
-  void p[keys[0]].nested.deep.value;
-  const vpMs = performance.now() - tVp0;
-
-  return { flatMs, flatPartialMs, debMs, vpMs };
+  return { flatT, debT };
 }
 
-// ── Main ──
 console.log("═══════════════════════════════════════════════════════════════");
-console.log("  Cold Start + Nested Read — the one metric that matters");
+console.log("  Cold Start + Nested Read (real localStorage)");
 console.log("═══════════════════════════════════════════════════════════════\n");
 
 const sizes = [100, 1000, 10000];
@@ -73,27 +52,24 @@ for (const SIZE of sizes) {
       nested: { deep: { value: i * 42, label: `deep_${i}` } },
     };
   }
-  const jsonKB = (JSON.stringify(data).length / 1024).toFixed(0);
-  const r = await measureColdRead(data);
-  results.push({ SIZE, jsonKB, ...r });
+  await populateFlat(`flat_${SIZE}`, data);
+  ls.setItem(`deb_${SIZE}`, JSON.stringify(data));
+  const r = await measureColdRead(`flat_${SIZE}`, `deb_${SIZE}`, data);
+  results.push({ SIZE, ...r });
 }
 
-// Print table
-console.log("  ┌────────────┬──────────┬──────────┬────────────────┬──────────┐");
-console.log("  │ Data Size  │ Flat all │ Flat 1k  │    Debounce    │  Valtio  │");
-console.log("  ├────────────┼──────────┼──────────┼────────────────┼──────────┤");
-for (const { SIZE, jsonKB, flatMs, flatPartialMs, debMs, vpMs } of results) {
-  const fastest = Math.min(flatMs, flatPartialMs, debMs, vpMs);
-  const fmt = (ms) => ms === fastest ? `(${ms.toFixed(0)} ms)` : ms.toFixed(0) + " ms";
-  console.log(`  │ ${(SIZE + " keys").padEnd(10)} │ ${fmt(flatMs).padStart(8)} │ ${fmt(flatPartialMs).padStart(8)} │ ${fmt(debMs).padStart(14)} │ ${fmt(vpMs).padStart(8)} │`);
+console.log("  ┌────────────┬──────────┬──────────────────┐");
+console.log("  │ Data Size  │   Flat   │    Debounce      │");
+console.log("  ├────────────┼──────────┼──────────────────┤");
+for (const { SIZE, flatT, debT } of results) {
+  const faster = flatT < debT ? "flat" : "deb";
+  const fmt = (ms, lbl) => lbl === faster ? `(${ms.toFixed(0)} ms)` : ms.toFixed(0) + " ms";
+  console.log(`  │ ${(SIZE + " keys").padEnd(10)} │ ${fmt(flatT, "flat").padStart(8)} │ ${fmt(debT, "deb").padStart(14)} │`);
 }
-console.log("  └────────────┴──────────┴──────────┴────────────────┴──────────┘");
+console.log("  └────────────┴──────────┴──────────────────┘");
 
-console.log("\n  Each cell = total time: construct → populate → read k0.nested.deep.value");
-console.log("  Flat all: build schema, reconstruct, load(''), read");
-console.log("  Flat 1k:  build schema, reconstruct, load('k0'), read (partial load)");
-console.log("  Debounce: construct from adapter (loads entire blob at construction), read");
-console.log("  Valtio: proxy creation + eager init over entire dataset, read");
-console.log("  (Bold values = fastest for that row)\n");
+console.log("\n  Flat: load one key (partial load) — reads only what it needs");
+console.log("  Debounce: construct loads entire blob — must read everything\n");
 
+ls.clear();
 process.exit(0);
