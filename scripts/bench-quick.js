@@ -15,18 +15,26 @@ async function measureColdRead(data) {
   const keys = Object.keys(data);
   const JSONBlob = JSON.stringify(data);
 
-  // Flat: build schema via API, then reconstruct + load + read
+  // Pre-populate Flat: build schema via API (NOT measured)
   const flatRaw = {};
   const flatPrep = new FlatWebStorage({ instance: makeSyncAdapter(flatRaw), namespace: "mb" });
   await flatPrep.init(); await flatPrep.load("");
   for (const k of keys) flatPrep.data[k] = data[k];
   await new Promise(r => setTimeout(r, 200)); // schema flush
 
+  // Flat full: reconstruct + load("") (loads all keys)
   const tFlat0 = performance.now();
   const f = new FlatWebStorage({ instance: makeSyncAdapter(flatRaw), namespace: "mb" });
   await f.init(); await f.load("");
   void f.data[keys[0]].nested.deep.value;
   const flatMs = performance.now() - tFlat0;
+
+  // Flat partial: reconstruct + load(keys[0]) (loads only 1 key)
+  const tFlatP = performance.now();
+  const fp = new FlatWebStorage({ instance: makeSyncAdapter(flatRaw), namespace: "mb" });
+  await fp.init(); await fp.load(keys[0]);
+  void fp.data[keys[0]].nested.deep.value;
+  const flatPartialMs = performance.now() - tFlatP;
 
   // Debounce: pre-populate blob, then construct + read
   const debRaw = {};
@@ -45,7 +53,7 @@ async function measureColdRead(data) {
   void p[keys[0]].nested.deep.value;
   const vpMs = performance.now() - tVp0;
 
-  return { flatMs, debMs, vpMs };
+  return { flatMs, flatPartialMs, debMs, vpMs };
 }
 
 // ── Main ──
@@ -71,18 +79,19 @@ for (const SIZE of sizes) {
 }
 
 // Print table
-console.log("  ┌────────────┬──────────┬────────────────┬──────────┐");
-console.log("  │ Data Size  │   Flat   │    Debounce    │  Valtio  │");
-console.log("  ├────────────┼──────────┼────────────────┼──────────┤");
-for (const { SIZE, jsonKB, flatMs, debMs, vpMs } of results) {
-  const fastest = Math.min(flatMs, debMs, vpMs);
+console.log("  ┌────────────┬──────────┬──────────┬────────────────┬──────────┐");
+console.log("  │ Data Size  │ Flat all │ Flat 1k  │    Debounce    │  Valtio  │");
+console.log("  ├────────────┼──────────┼──────────┼────────────────┼──────────┤");
+for (const { SIZE, jsonKB, flatMs, flatPartialMs, debMs, vpMs } of results) {
+  const fastest = Math.min(flatMs, flatPartialMs, debMs, vpMs);
   const fmt = (ms) => ms === fastest ? `(${ms.toFixed(0)} ms)` : ms.toFixed(0) + " ms";
-  console.log(`  │ ${(SIZE + " keys").padEnd(10)} │ ${fmt(flatMs).padStart(8)} │ ${fmt(debMs).padStart(14)} │ ${fmt(vpMs).padStart(8)} │`);
+  console.log(`  │ ${(SIZE + " keys").padEnd(10)} │ ${fmt(flatMs).padStart(8)} │ ${fmt(flatPartialMs).padStart(8)} │ ${fmt(debMs).padStart(14)} │ ${fmt(vpMs).padStart(8)} │`);
 }
-console.log("  └────────────┴──────────┴────────────────┴──────────┘");
+console.log("  └────────────┴──────────┴──────────┴────────────────┴──────────┘");
 
 console.log("\n  Each cell = total time: construct → populate → read k0.nested.deep.value");
-console.log("  Flat: build schema via API, reconstruct, load(''), read");
+console.log("  Flat all: build schema, reconstruct, load(''), read");
+console.log("  Flat 1k:  build schema, reconstruct, load('k0'), read (partial load)");
 console.log("  Debounce: construct from adapter (loads entire blob at construction), read");
 console.log("  Valtio: proxy creation + eager init over entire dataset, read");
 console.log("  (Bold values = fastest for that row)\n");
