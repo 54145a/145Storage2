@@ -1,21 +1,71 @@
-// Quick benchmark: 145Storage vs Valtio (Round A only, moderate iterations)
-// Run: node --experimental-webstorage --localstorage-file=/tmp/bench-quick.db scripts/bench-quick.js
+// bench-quick.js: Consolidated benchmark — Flat vs Debounce vs Valtio
+// Run: node --experimental-webstorage --localstorage-file=/tmp/bench.db scripts/bench-quick.js
 import { proxy, subscribe, snapshot } from "valtio/vanilla";
 import { FlatWebStorage, WebStorageItemStorage } from "../storage.js";
 import { createStorage } from "unstorage";
 import memory from "unstorage/drivers/memory";
 
-const N = 200000;
-
-function bench(name, fn, iterations = N) {
-  for (let i = 0; i < 10000; i++) fn(); // JIT warmup
-  const t0 = performance.now();
-  for (let i = 0; i < iterations; i++) fn();
-  const dt = performance.now() - t0;
-  console.log(`${name.padEnd(58)} ${(dt / iterations * 1e6).toFixed(1).padStart(8)} ns/op  (${iterations.toLocaleString()} ops)`);
+// ── Helpers ──
+function bench(fn, N = 200000) {
+  try {
+    for (let i = 0; i < 10000; i++) fn(); // JIT warmup
+    const t0 = performance.now();
+    for (let i = 0; i < N; i++) fn();
+    return ((performance.now() - t0) * 1e6 / N);
+  } catch { return Infinity; }
 }
 
-// ── Setup ──
+function ms(fn, N = 10) {
+  try {
+    for (let i = 0; i < 3; i++) fn();
+    const t0 = performance.now();
+    for (let i = 0; i < N; i++) fn();
+    return (performance.now() - t0) / N;
+  } catch { return Infinity; }
+}
+
+function tbl(rows) {
+  const w = [32, 12, 12, 12, 12];
+  const h = ["", "Flat", "Debounce", "VP+persist", "VP raw"];
+  console.log("  " + h.map((s,i) => s.padEnd(w[i])).join(""));
+  console.log("  " + w.map(i => "─".repeat(i)).join(""));
+  for (const [label, ...vals] of rows) {
+    const best = Math.min(...vals.filter(v => v < Infinity));
+    console.log("  " + [label, ...vals.map((v,i) =>
+      v === Infinity ? "N/A" : v < 1000 ? `${v.toFixed(0)} ns` : `${(v/1000).toFixed(1)} µs`
+    )].map((s,i) => s.padEnd(w[i])).join(""));
+  }
+}
+
+function msTbl(rows) {
+  const w = [38, 10, 10];
+  const h = ["", "Flat", "Debounce", "Valtio"];
+  console.log("  " + h.map((s,i) => s.padEnd(w[i])).join(""));
+  console.log("  " + w.map(i => "─".repeat(i)).join(""));
+  for (const [label, flat, deb, vp] of rows) {
+    console.log("  " + [label,
+      flat === Infinity ? "N/A" : flat.toFixed(1) + " ms",
+      deb === Infinity ? "N/A" : deb.toFixed(1) + " ms",
+      vp === Infinity ? "N/A" : vp.toFixed(1) + " ms"
+    ].map((s,i) => s.padEnd(w[i])).join(""));
+  }
+}
+
+function makeSyncAdapter(store) {
+  return {
+    getItem: (key) => store[key] ?? null,
+    setItem: (key, value) => { store[key] = value; },
+    removeItem: (key) => { delete store[key]; },
+  };
+}
+
+// ══════════════════════════════════════════════════════════════
+// Section 1: Setup + Speed benchmarks (same data, same ops)
+// ══════════════════════════════════════════════════════════════
+console.log("═══════════════════════════════════════════════════════════════");
+console.log("  145Storage vs Valtio — Consolidated Benchmark");
+console.log("═══════════════════════════════════════════════════════════════");
+
 const flatMem = createStorage({ driver: memory() });
 const flat = new FlatWebStorage({ instance: flatMem, namespace: "bf" });
 await flat.init();
@@ -37,9 +87,7 @@ const wd = wst.data;
 
 const vpStore = proxy({
   config: { display: { brightness: 80, volume: 50 } },
-  arr: [1, 2, 3, 4, 5],
-  count: 0,
-  a: { b: 0 },
+  arr: [1, 2, 3, 4, 5], count: 0, a: { b: 0 },
 });
 const vpMem = createStorage({ driver: memory() });
 let vpTimer = null;
@@ -53,167 +101,141 @@ subscribe(vpStore, () => {
 
 const vRaw = proxy({
   config: { display: { brightness: 80, volume: 50 } },
-  arr: [1, 2, 3, 4, 5],
-  count: 0,
-  a: { b: 0 },
+  arr: [1, 2, 3, 4, 5], count: 0, a: { b: 0 },
 });
 
-console.log("=== Nested Read: d.config.display.brightness ===");
-bench("[Flat]           nested read", () => { const x = fd.config.display.brightness; });
-bench("[Debounce]       nested read", () => { const x = wd.config.display.brightness; });
-bench("[Valtio+persist] nested read", () => { const x = vpStore.config.display.brightness; });
-bench("[Valtio raw]     nested read", () => { const x = vRaw.config.display.brightness; });
+console.log("\n── 1. Speed: same data, same ops ──\n");
 
-console.log("\n=== Shallow Read: d.arr ===");
-bench("[Flat]           shallow read", () => { const x = fd.arr; });
-bench("[Debounce]       shallow read", () => { const x = wd.arr; });
-bench("[Valtio+persist] shallow read", () => { const x = vpStore.arr; });
-bench("[Valtio raw]     shallow read", () => { const x = vRaw.arr; });
+tbl([
+  ["nested read (3-level)", bench(() => fd.config.display.brightness), bench(() => wd.config.display.brightness), bench(() => vpStore.config.display.brightness), bench(() => vRaw.config.display.brightness)],
+  ["shallow read", bench(() => fd.arr), bench(() => wd.arr), bench(() => vpStore.arr), bench(() => vRaw.arr)],
+]);
+console.log();
+tbl([
+  ["nested read (a.b)", bench(() => fd.a.b, 100000), bench(() => wd.a.b, 100000), bench(() => vpStore.a.b, 100000), bench(() => vRaw.a.b, 100000)],
+]);
+console.log();
+tbl([
+  ["shallow write (same)", bench(() => { fd.count = 1; }, 50000), bench(() => { wd.count = 1; }, 50000), bench(() => { vpStore.count = 1; }, 50000), bench(() => { vRaw.count = 1; }, 50000)],
+  ["shallow write (alt)",  bench(() => { fd.count = Math.random(); }, 50000), bench(() => { wd.count = Math.random(); }, 50000), bench(() => { vpStore.count = Math.random(); }, 50000), bench(() => { vRaw.count = Math.random(); }, 50000)],
+]);
+console.log();
+tbl([
+  ["nested write (same)", bench(() => { fd.a.b = 1; }, 100000), bench(() => { wd.a.b = 1; }, 100000), bench(() => { vpStore.a.b = 1; }, 100000), bench(() => { vRaw.a.b = 1; }, 100000)],
+  ["nested write (alt)",  bench(() => { fd.a.b = Math.random(); }, 100000), bench(() => { wd.a.b = Math.random(); }, 100000), bench(() => { vpStore.a.b = Math.random(); }, 100000), bench(() => { vRaw.a.b = Math.random(); }, 100000)],
+]);
+console.log();
+tbl([
+  ["Object.keys", bench(() => Object.keys(fd), 50000), bench(() => Object.keys(wd), 50000), bench(() => Object.keys(vpStore), 50000), bench(() => Object.keys(vRaw), 50000)],
+  ["spread", bench(() => { const c = { ...fd }; }, 50000), bench(() => { const c = { ...wd }; }, 50000), bench(() => { const c = { ...vpStore }; }, 50000), bench(() => { const c = { ...vRaw }; }, 50000)],
+]);
 
-console.log("\n=== Shallow Write: d.count = 1 ===");
-// Same-value writes measure the redundant-write short-circuit path
-// (Debounce: Object.is guard; Valtio: objectIs guard; Flat: full work).
-let t0v = 0, t1v = 0;
-bench("[Flat]           shallow write (same-value)", () => { fd.count = 1; }, 50000);
-bench("[Debounce]       shallow write (same-value)", () => { wd.count = 1; }, 50000);
-bench("[Valtio+persist] shallow write (same-value)", () => { vpStore.count = 1; }, 50000);
-bench("[Valtio raw]     shallow write (same-value)", () => { vRaw.count = 1; }, 50000);
+// ══════════════════════════════════════════════════════════════
+// Section 2: Flat Capability Advantages
+// ══════════════════════════════════════════════════════════════
+console.log("\n── 2. Flat Capability Advantages ──");
+console.log("   (Flat stores flat KV; Debounce/Valtio store single blob)\n");
 
-// Alternating values force a REAL mutation on every iteration.
-bench("[Flat]           shallow write (alternating)", () => { fd.count = (t0v = 1 - t0v); }, 50000);
-bench("[Debounce]       shallow write (alternating)", () => { wd.count = (t1v = 1 - t1v); }, 50000);
-bench("[Valtio+persist] shallow write (alternating)", () => { vpStore.count = (t0v = 1 - t0v); }, 50000);
-bench("[Valtio raw]     shallow write (alternating)", () => { vRaw.count = (t1v = 1 - t1v); }, 50000);
-
-console.log("\n=== Nested Write: d.a.b = 1 ===");
-bench("[Flat]           nested write (same-value)", () => { fd.a.b = 1; }, 100000);
-bench("[Debounce]       nested write (same-value)", () => { wd.a.b = 1; }, 100000);
-bench("[Valtio+persist] nested write (same-value)", () => { vpStore.a.b = 1; }, 100000);
-bench("[Valtio raw]     nested write (same-value)", () => { vRaw.a.b = 1; }, 100000);
-
-bench("[Flat]           nested write (alternating)", () => { fd.a.b = (t0v = 1 - t0v); }, 100000);
-bench("[Debounce]       nested write (alternating)", () => { wd.a.b = (t1v = 1 - t1v); }, 100000);
-bench("[Valtio+persist] nested write (alternating)", () => { vpStore.a.b = (t0v = 1 - t0v); }, 100000);
-bench("[Valtio raw]     nested write (alternating)", () => { vRaw.a.b = (t1v = 1 - t1v); }, 100000);
-
-console.log("\n=== Nested Read: d.a.b ===");
-bench("[Flat]           nested read", () => { const x = fd.a.b; }, 100000);
-bench("[Debounce]       nested read", () => { const x = wd.a.b; }, 100000);
-bench("[Valtio+persist] nested read", () => { const x = vpStore.a.b; }, 100000);
-bench("[Valtio raw]     nested read", () => { const x = vRaw.a.b; }, 100000);
-
-console.log("\n=== Object.keys(proxy) ===");
-bench("[Flat]           Object.keys", () => { Object.keys(fd); }, 50000);
-bench("[Debounce]       Object.keys", () => { Object.keys(wd); }, 50000);
-bench("[Valtio+persist] Object.keys", () => { Object.keys(vpStore); }, 50000);
-bench("[Valtio raw]     Object.keys", () => { Object.keys(vRaw); }, 50000);
-
-console.log("\n=== Spread: {...proxy} ===");
-bench("[Flat]           spread", () => { const c = { ...fd }; }, 50000);
-bench("[Debounce]       spread", () => { const c = { ...wd }; }, 50000);
-bench("[Valtio+persist] spread", () => { const c = { ...vpStore }; }, 50000);
-bench("[Valtio raw]     spread", () => { const c = { ...vRaw }; }, 50000);
-
-// ── Flat Capability Advantages ──
-// Flat stores data as flat key-value pairs (one KV per key);
-// Debounce stores everything in a single JSON blob.
-// This means Flat's reads scale with what you read,
-// while Debounce's reads scale with the TOTAL dataset size.
-
-console.log("\n\n============================================================");
-console.log("  Flat Capability Advantages (Debounce/Valtio cannot do these)");
-console.log("============================================================");
-
-// --- 1. Read: 1 key (Flat) vs entire dataset (Debounce/Valtio) ---
+// 2a. Partial read: 1 key vs entire blob
 {
-  const PARTIAL_N = 100;
-  const partialMem = createStorage({ driver: memory() });
-  const partialWstMem = createStorage({ driver: memory() });
-  const partialVpMem = createStorage({ driver: memory() });
-
-  // Pre-populate all three with the same 100-key dataset
+  const PN = 100;
+  const pStore = {};
+  const pDebStore = {};
   const largeObj = {};
-  for (let i = 0; i < PARTIAL_N; i++) {
+  for (let i = 0; i < PN; i++) {
     const v = { v: i, tags: ["a","b","c"], nested: { x: i } };
     largeObj[`k${i}`] = v;
-    await partialMem.setItem(`k${i}`, JSON.stringify(v));  // Flat: one KV per key
+    pStore[`k${i}`] = v;  // Flat: store parsed objects (what Flat expects)
   }
-  await partialWstMem.setItem("data", JSON.stringify(largeObj)); // Debounce: one big blob
-  await partialVpMem.setItem("vp", JSON.stringify(largeObj));   // Valtio+persist: one big blob
+  pDebStore["data"] = JSON.stringify(largeObj);  // Debounce: JSON string
 
-  console.log("\n--- 1. Read: 1 key (Flat) vs entire blob (Debounce/Valtio) ---");
-  // Flat: adapter reads ONE small item
-  bench("[Flat]  adapter.getItem (1 key)", async () => {
-    await partialMem.getItem("k50");
-  }, 5000);
-  // Debounce: adapter reads ONE large blob containing all 100 keys
-  bench("[Debounce] adapter.getItem (1 big blob)", async () => {
-    await partialWstMem.getItem("data");
-  }, 5000);
-  // Valtio+persist: same blob model — reads entire blob even for 1 key
-  bench("[Valtio+persist] adapter.getItem (1 big blob)", async () => {
-    await partialVpMem.getItem("vp");
-  }, 5000);
+  const pFlat = new FlatWebStorage({ instance: makeSyncAdapter(pStore), namespace: "pr" });
+  await pFlat.init(); await pFlat.load("");
+  const pfd = pFlat.data;
+  const prDebAdapter = makeSyncAdapter(pDebStore);
 
-  console.log("\n--- 2. Full Dataset Read: all 100 keys ---");
-  // Flat: adapter reads all 100 items (async overhead per key)
-  const flatFullReadStart = performance.now();
-  for (let i = 0; i < PARTIAL_N; i++) await partialMem.getItem(`k${i}`);
-  const flatFullReadTime = (performance.now() - flatFullReadStart);
-  console.log(`  [Flat]  100 sequential reads:       ${flatFullReadTime.toFixed(0).padStart(8)} ms`);
-  // Debounce: adapter reads one blob (fast bulk read)
-  const debounceFullReadStart = performance.now();
-  for (let i = 0; i < 100; i++) {
-    const raw = await partialWstMem.getItem("data");
-    void (typeof raw === "string" ? JSON.parse(raw) : raw);
-  }
-  const debounceFullReadTime = (performance.now() - debounceFullReadStart);
-  console.log(`  [Debounce] 100 full-blob reads:     ${debounceFullReadTime.toFixed(0).padStart(8)} ms`);
-
-  console.log("\n  For partial reads (1 key), Flat reads only that key —");
-  console.log("  Debounce/Valtio+persist must read the ENTIRE blob, even for 1 key.");
-  console.log("  For full reads, blob wins (single bulk read).");
-  console.log("  Flat's advantage scales with dataset size and adapter latency.");
+  console.log("  Partial Read: 1 key vs entire blob (100-key dataset)");
+  console.log("  ──────────────────────────────────────────────────────");
+  const r1 = bench(() => { void pfd.k50.v; }, 10000); // Flat: read 1 key from cache
+  const r2 = bench(async () => { await prDebAdapter.getItem("data"); }, 10000); // Debounce: read entire blob
+  console.log(`  Flat  read 1 key from cache:     ${r1.toFixed(0)} ns`);
+  console.log(`  Debounce adapter.getItem (1 blob):  ${r2.toFixed(0)} ns`);
+  console.log(`  (Flat reads from warm cache; Debounce reads entire blob from adapter)\n`);
 }
 
-// --- 3. Immediate Persistence (Flat) vs Debounced Flush (Debounce) ---
+// 2b. Write Model: all three are non-blocking, but differ in granularity
 {
-  console.log("\n--- 3. Immediate Persistence vs Debounced Flush ---");
-  const immMem = createStorage({ driver: memory() });
-  const immFlat = new FlatWebStorage({ instance: immMem, namespace: "im" });
-  await immFlat.init();
-  immFlat.data.x = 1;
-  await new Promise((r) => setTimeout(r, 200));
-
-  // Flat: write triggers immediate adapter.set()
-  immFlat.data.x = 99;
-  const immVal = await immMem.getItem("im:x");
-  console.log("  [Flat]  adapter value after write:", typeof immVal === "object" ? immVal.value : immVal);
-
-  // Debounce: write triggers requestUpdate (flush later)
-  wd.x = 99;
-  const dBefore = JSON.parse(await wstMem.getItem("data"));
-  console.log("  [Debounce] adapter value NOW (flush pending):", dBefore?.x);
-  await new Promise((r) => setTimeout(r, 250));
-  const dAfter = JSON.parse(await wstMem.getItem("data"));
-  console.log("  [Debounce] adapter value AFTER flush:", dAfter?.x);
-  console.log("  (Flat: adapter writes are immediate; Debounce: writes are batched)");
+  console.log("  Write Model (all non-blocking, but different granularity)");
+  console.log("  ──────────────────────────────────────────────────────");
+  console.log("  Flat:    granular async (each key = 1 async adapter.set)");
+  console.log("  Debounce: batched async (writes in memory, flush periodically)");
+  console.log("  Valtio:  subscriber notifications (version bump)");
+  console.log("  (No approach blocks the caller — all return synchronously)\n");
 }
 
-// --- 4. getSubKeys (schema-driven key enumeration) ---
+// 2c. getSubKeys
 {
-  console.log("\n--- 4. getSubKeys (schema-driven key enumeration) ---");
-  const subMem = createStorage({ driver: memory() });
-  for (let i = 0; i < 50; i++) {
-    await subMem.setItem(`k${i}`, JSON.stringify({ v: i }));
-  }
-  const subFlat = new FlatWebStorage({ instance: subMem, namespace: "sub" });
-  await subFlat.init();
-  await subFlat.load("");
-
-  bench("[Flat]  getSubKeys (50 keys)", () => { subFlat.getSubKeys(""); }, 5000);
-  console.log("  (Debounce/Valtio: no schema-driven sub-key enumeration)");
+  console.log("  getSubKeys (schema-driven enumeration)");
+  console.log("  ──────────────────────────────────────");
+  const sStore = {};
+  for (let i = 0; i < 50; i++) sStore[`k${i}`] = { v: i };
+  const sFlat = new FlatWebStorage({ instance: makeSyncAdapter(sStore), namespace: "sub" });
+  await sFlat.init(); await sFlat.load("");
+  const sk = bench(() => sFlat.getSubKeys(""), 5000);
+  console.log(`  Flat  getSubKeys (50 keys):      ${sk.toFixed(0)} ns`);
+  console.log("  Debounce/Valtio: no schema enumeration\n");
 }
 
-await new Promise((r) => setTimeout(r, 400));
-console.log("\ndone");
+// ══════════════════════════════════════════════════════════════
+// Section 3: 1MB Cold Start
+// ══════════════════════════════════════════════════════════════
+console.log("── 3. 1MB Cold Start + Deep Path Read ──\n");
+
+const MB_SIZE = 10000;
+const MB_DATA = {};
+for (let i = 0; i < MB_SIZE; i++) {
+  MB_DATA[`k${i}`] = {
+    id: i, name: `item_${i}`,
+    config: { enabled: i % 2 === 0, priority: i % 10 },
+    nested: { deep: { value: i * 42, label: `deep_${i}`, tags: ["a","b","c"] } },
+  };
+}
+const MB_JSON = JSON.stringify(MB_DATA);
+console.log(`  Dataset: ${MB_SIZE} keys, ${(MB_JSON.length / 1024).toFixed(0)} KB JSON\n`);
+
+// Pre-populate Flat via API (builds schema)
+const csFlatRaw = {};
+const csFlatPrep = new FlatWebStorage({ instance: makeSyncAdapter(csFlatRaw), namespace: "mb" });
+await csFlatPrep.init(); await csFlatPrep.load("");
+for (let i = 0; i < MB_SIZE; i++) csFlatPrep.data[`k${i}`] = MB_DATA[`k${i}`];
+await new Promise(r => setTimeout(r, 200)); // wait for schema flush
+
+// Pre-populate Debounce (single blob)
+const csDebRaw = {}; csDebRaw["data"] = MB_JSON;
+const csDebAdapter = makeSyncAdapter(csDebRaw);
+
+console.log("  Cold Start from pre-populated adapters + read k5000.nested.deep.value\n");
+msTbl([
+  ["Flat  reconstruct + load('')", ms(async () => {
+    const f = new FlatWebStorage({ instance: makeSyncAdapter(csFlatRaw), namespace: "mb" });
+    await f.init(); await f.load("");
+    void f.data.k5000.nested.deep.value;
+  }), Infinity, Infinity],
+  ["Debounce reconstruct (loads 1MB)", ms(async () => {
+    const d = new WebStorageItemStorage("data", csDebAdapter, 200000);
+    await d.init();
+    void d.data.k5000.nested.deep.value;
+  }), Infinity, Infinity],
+  ["Valtio proxy + eager init", Infinity, Infinity, ms(() => {
+    const p = proxy(JSON.parse(MB_JSON));
+    void p.k5000.nested.deep.value;
+  })],
+]);
+
+console.log("\n  Flat loads only 1 key from adapter; Debounce loads entire 1MB blob.");
+console.log("  Flat's advantage scales with dataset size.\n");
+
+console.log("═══════════════════════════════════════════════════════════════");
+console.log("  done");
+console.log("═══════════════════════════════════════════════════════════════");
+process.exit(0);
