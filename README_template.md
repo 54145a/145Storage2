@@ -29,8 +29,14 @@ settings.count += 1;
 
 ## 🚀 Try it now
 
-```typescript
-{{TEST}}
+```sh
+npm i @54145a/storage2
+```
+
+Three storage flavors, one ergonomic idea: edit a plain object and it persists. The tour below is real, executed code (`example.js` — run it yourself with `pnpm example`):
+
+```js
+{{EXAMPLE}}
 ```
 
 ---
@@ -99,8 +105,9 @@ Repo layout:
 
 - `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
 - `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and committed — rebuild, don't hand-edit.
-- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `test.ts` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
-- `test.ts` is the only test file (plain `node:assert` + console runner, no test framework).
+- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
+- `example.js` is the runnable quick-start injected into the "Try it now" section — it's executed by `pnpm example` and type-checked by `tsc`, so the README examples can't drift from real behavior.
+- `test.ts` is the test file (plain `node:assert` + console runner, no test framework).
 - `typedoc.json` builds the showcase site with **TypeDoc** (API docs from the `storage.js` JSDoc, this README as front page) — `buildDocs.ts` runs it via `pnpm site`, so `pnpm build` outputs `docs/dist` in one flow.
 
 ## 📚 Reference

@@ -5,3 +5,5 @@ storage.d.ts
 docs/dist
 test.db
 test.db*
+example.db
+example.db*
