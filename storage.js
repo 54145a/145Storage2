@@ -1,7 +1,7 @@
 //@ts-check
 /**
  * @author 145a
- * @license AGPL-3.0
+ * @license LGPL-3.0-or-later
  */
 
 //#region 
@@ -24,6 +24,15 @@ const lightDeepProxyCache = new WeakMap();
 const fullDeepProxyCache = new WeakMap();
 /** @type {WeakSet<object>} */
 const knownDeepProxies = new WeakSet();
+/** @type {WeakMap<object, Map<string, string[]>>} */
+const ownKeysCache = new WeakMap();
+/** @type {WeakMap<object, Map<string, {configurable: boolean, enumerable: boolean, writable: boolean, value: undefined} | null>>} */
+const gopdCache = new WeakMap();
+/** @param {object} instance */
+function clearEnumerationCaches(instance) {
+	ownKeysCache.delete(instance);
+	gopdCache.delete(instance);
+}
 
 /** 
  * @typedef {object} DeepProxyHandler 
@@ -577,7 +586,17 @@ class FlatJSONStorage extends StorageInterface {
 				return this.cache.get(key);
 			},
 			set: (target, key, value) => {
-				assertIsJSONStorageStorableValue(value, "flat key:", key);
+				// Fast path: same value, skip validation, schema management, and adapter write
+				const cached = this.cache.get(key);
+				if (cached !== undefined && Object.is(cached, value)) return true;
+
+				// Fast path: inline validation for primitives (avoids function call chain)
+				const t = typeof value;
+				if (t === "string" || t === "boolean" || value === null || (t === "number" && isFinite(value))) {
+					// Valid primitive — proceed
+				} else {
+					assertIsJSONStorageStorableValue(value, "flat key:", key);
+				}
 
 				const oldSchemaNode = this._getSchemaNode(key);
 				const oldNodeType = getSchemaNodeValueType(oldSchemaNode);
@@ -622,6 +641,7 @@ class FlatJSONStorage extends StorageInterface {
 						console.error(e);
 					}
 				}
+				clearEnumerationCaches(this);
 				return true;
 			},
 			deleteProperty: (target, key) => {
@@ -638,21 +658,32 @@ class FlatJSONStorage extends StorageInterface {
 					console.error(e);
 				}
 				this._deleteSchemaNode(key);
+				clearEnumerationCaches(this);
 				return true;
 			},
 			ownKeys: (target, key) => {
-				const schemaNode = this._getSchemaNode(key);
-				if (schemaNode && typeof schemaNode === "object") {
-					return Object.keys(schemaNode);
+				let cache = ownKeysCache.get(this);
+				if (cache) {
+					const keys = cache.get(key);
+					if (keys !== undefined) return keys;
 				}
-				return [];
+				const schemaNode = this._getSchemaNode(key);
+				const keys = (schemaNode && typeof schemaNode === "object") ? Object.keys(schemaNode) : [];
+				if (!cache) { cache = new Map(); ownKeysCache.set(this, cache); }
+				cache.set(key, keys);
+				return keys;
 			},
 			getOwnPropertyDescriptor: (target, key, prop) => {
-				const schemaNode = this._getSchemaNode(key);
-				if (schemaNode !== undefined) {
-					return { configurable: true, enumerable: true, writable: true, value: undefined };
+				let cache = gopdCache.get(this);
+				if (cache) {
+					const desc = cache.get(key);
+					if (desc !== undefined) return desc === null ? undefined : desc;
 				}
-				return undefined;
+				const schemaNode = this._getSchemaNode(key);
+				const desc = schemaNode !== undefined ? { configurable: true, enumerable: true, writable: true, value: undefined } : null;
+				if (!cache) { cache = new Map(); gopdCache.set(this, cache); }
+				cache.set(key, desc);
+				return desc === null ? undefined : desc;
 			}
 		}
 
@@ -670,6 +701,7 @@ class FlatJSONStorage extends StorageInterface {
 			{ structuredCloneExempt: true }
 		);
 		this.schema = this.schemaStorage.data;
+		clearEnumerationCaches(this);
 
 		this.isReady = true;
 	}
@@ -701,6 +733,7 @@ class FlatJSONStorage extends StorageInterface {
 			}
 		}
 		await Promise.all(deletePromises);
+		clearEnumerationCaches(this);
 	}
 
 	/**
@@ -929,6 +962,7 @@ class FlatJSONStorage extends StorageInterface {
 		} else {
 			this._deleteSchemaNode(key);
 		}
+		clearEnumerationCaches(this);
 	}
 }
 //#endregion

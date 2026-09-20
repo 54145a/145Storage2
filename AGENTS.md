@@ -40,4 +40,4 @@ pnpm site        # TypeDoc build → docs/dist (site only; buildDocs.ts runs thi
   - `normalizeKey` rewrites `/` `\` `?` and strips leading/trailing `:` in keys; `a/b` collides with `a:b`.
   - The schema markers are safe: the whole schema lives in one JSON document under `__145Storage__flatSchema__`, and `getSchemaNodeValueType` also accepts object/array markers.
 - Symbol properties are unsupported by `createDeepProxy` (asserted via `console.assert`).
-- License is AGPL-3.0-only; headers on `storage.js` say `@license AGPL-3.0`.
+- License is LGPL-3.0-or-later; headers on `storage.js` say `@license LGPL-3.0-or-later`.
