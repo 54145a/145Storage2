@@ -6,7 +6,7 @@
 		"test": "node --experimental-webstorage --localstorage-file=test.db test.ts",
 		"example": "node --experimental-webstorage --localstorage-file=example.db example.js",
 		"build": "tsc && tsc -p scripts/tsconfig.json && tsc -p tsconfig.build.json && node scripts/buildDocs.ts",
-		"bench": "node --experimental-webstorage --localstorage-file=/tmp/bench.db scripts/bench.js",
+		"bench": "node --experimental-webstorage --localstorage-file=/tmp/bench.db --trace-deopt scripts/bench.js",
 		"site": "pnpm dlx --package typescript@6.0.3 --package typedoc@0.28.20 typedoc --options typedoc.json",
 		"prepublish": "tsc -p tsconfig.build.json"
 	},
