@@ -39,5 +39,5 @@ pnpm site        # TypeDoc build → docs/dist (site only; buildDocs.ts runs thi
   - Primitive strings round-trip via `String()` + `destr`, so literals like `"{}"`, `"[]"`, `"0"`, `"true"`/`"false"`, `"null"` come back as other types — don't store those exact strings.
   - `normalizeKey` rewrites `/` `\` `?` and strips leading/trailing `:` in keys; `a/b` collides with `a:b`.
   - The schema markers are safe: the whole schema lives in one JSON document under `__145Storage__flatSchema__`, and `getSchemaNodeValueType` also accepts object/array markers.
-- Symbol properties are unsupported by `createDeepProxy` (asserted via `console.assert`).
+- Symbol properties are unsupported by **both** proxies (`createFullDeepProxy` and `createLightDeepProxy`): a user Symbol gets a `console.assert` notice and never reaches the handler, so it is never persisted. Built-in Symbols pass through.
 - License is LGPL-3.0-or-later; headers on `storage.js` say `@license LGPL-3.0-or-later`.

@@ -24,6 +24,13 @@ const lightDeepProxyCache = new WeakMap();
 const fullDeepProxyCache = new WeakMap();
 /** @type {WeakSet<object>} */
 const knownDeepProxies = new WeakSet();
+/**
+ * Light proxy → the `DeepProxyHandler` that owns it. Membership in
+ * {@link knownDeepProxies} alone does not identify the owning storage, so
+ * assigning one instance's value into another has to check this.
+ * @type {WeakMap<object, DeepProxyHandler>}
+ */
+const deepProxyOwners = new WeakMap();
 /** @type {WeakMap<object, Map<string, string[]>>} */
 const ownKeysCache = new WeakMap();
 /** @type {WeakMap<object, Map<string, {configurable: boolean, enumerable: boolean, writable: boolean, value: undefined} | null>>} */
@@ -78,7 +85,7 @@ const assertSymbol = (/** @type {string|symbol} */ prop) => {
 	if (typeof prop === "symbol" && !builtInSymbols.has(prop)) {
 		console.assert(false,
 			`Symbol("${Symbol.keyFor(prop) || prop.description}") is not a built-in Symbol ` +
-			`and is not supported by createFullDeepProxy. ` +
+			`and is not supported by deep proxies. ` +
 			`JSON storage cannot serialize Symbol properties.`
 		);
 	}
@@ -91,7 +98,10 @@ const assertSymbol = (/** @type {string|symbol} */ prop) => {
  * reachable nested value must already be wrapped by the caller (`_eagerWrap`)
  * so reads are pure native property access through the proxy boundary.
  * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
- * {@link createFullDeepProxy}.
+ * {@link createFullDeepProxy}. Symbol handling is identical there: built-in
+ * Symbols pass through to `Reflect`, user-defined Symbols get a
+ * `console.assert` notice and never reach `handler` — a value JSON cannot
+ * serialize must not be reported as persisted.
  * @param {object} target
  * @param {DeepProxyHandler} handler
  * @returns {*}
@@ -103,17 +113,41 @@ function createLightDeepProxy(target, handler) {
 	}
 	const proxy = new Proxy(target, {
 		set(obj, prop, value, receiver) {
-			if (handler.set) return handler.set(obj, /** @type {string} */(prop), value, receiver);
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.set(obj, prop, value, receiver); }
+			if (handler.set) return handler.set(obj, prop, value, receiver);
 			return Reflect.set(obj, prop, value, receiver);
 		},
 		deleteProperty(obj, prop) {
-			if (handler.deleteProperty) return handler.deleteProperty(obj, /** @type {string} */(prop));
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.deleteProperty(obj, prop); }
+			if (handler.deleteProperty) return handler.deleteProperty(obj, prop);
 			return Reflect.deleteProperty(obj, prop);
 		}
 	});
 	knownDeepProxies.add(proxy);
+	deepProxyOwners.set(proxy, handler);
 	lightDeepProxyCache.set(target, new ProxyCacheEntry(proxy, "", handler));
 	return proxy;
+}
+/**
+ * True when `value` is a light proxy owned by a *different* handler, i.e. it
+ * belongs to another `JSONDebounceStorage` instance.
+ * @param {*} value
+ * @param {DeepProxyHandler} handler
+ */
+function isForeignDeepProxy(value, handler) {
+	return knownDeepProxies.has(/** @type {object} */ (value)) && deepProxyOwners.get(/** @type {object} */ (value)) !== handler;
+}
+/**
+ * Detaches a value that is, or contains, a foreign light proxy: writes through
+ * such a proxy dispatch to the *other* storage's updater, so storing it as-is
+ * would send this instance's writes to the wrong backend. JSON is the persisted
+ * form of every value that passed `assertIsJSONStorageStorableValue`, so the
+ * round-trip is lossless and yields plain data this instance can wrap itself —
+ * the same isolation `DebounceStorage` applies to its initial value.
+ * @param {*} value
+ */
+function detachForeignProxy(value) {
+	return JSON.parse(/** @type {string} */ (JSON.stringify(value)));
 }
 /**
  * The full-featured deep proxy: reports every property access as a
@@ -389,7 +423,11 @@ class JSONDebounceStorage extends DebounceStorage {
 			 * @param {object|undefined} receiver
 			 */
 			set: (target, prop, value, receiver) => {
-if (!Array.isArray(target) && Object.hasOwn(target, /** @type {string} */(prop)) && Object.is((/** @type {Record<string|symbol, any>} */ (target))[/** @type {string} */ (prop)], value)) return true;
+				// Identical-value writes are no-ops. Arrays are excluded: an array
+				// replacement is replayed onto the debouncer's own array with
+				// `splice()`, where every index/length write is `Object.is`-equal
+				// and would otherwise skip `requestUpdate()` and never persist.
+				if (!Array.isArray(target) && Object.hasOwn(target, prop) && Object.is(/** @type {Record<string, any>} */ (target)[prop], value)) return true;
 				assertIsJSONStorageStorableValue(value);
 				onSet(value, prop);
 				this.requestUpdate();
@@ -406,10 +444,10 @@ if (!Array.isArray(target) && Object.hasOwn(target, /** @type {string} */(prop))
 		};
 		/**
 		 * JSON object/array values are stored wrapped in light proxies, so
-		 * reads need no `get` trap. Already-wrapped values pass through.
-		 * The assigned value's OWN nested objects/arrays are recursively
-		 * wrapped too — otherwise reads would return raw inner values whose
-		 * mutations bypass every trap (and persistence).
+		 * reads need no `get` trap. Values already wrapped by *this* instance
+		 * pass through. The assigned value's OWN nested objects/arrays are
+		 * recursively wrapped too — otherwise reads would return raw inner
+		 * values whose mutations bypass every trap (and persistence).
 		 * @param {*} value
 		 * @returns {*}
 		 */
@@ -417,7 +455,10 @@ if (!Array.isArray(target) && Object.hasOwn(target, /** @type {string} */(prop))
 			if (value === null || typeof value !== "object" || !(Array.isArray(value) || isPlainObject(value))) {
 				return value;
 			}
-			if (knownDeepProxies.has(value)) return value;
+			if (knownDeepProxies.has(value)) {
+				if (!isForeignDeepProxy(value, handler)) return value;
+				value = detachForeignProxy(value);
+			}
 			const proxy = createLightDeepProxy(value, handler);
 			JSONDebounceStorage._eagerWrap(value, handler);
 			return proxy;
@@ -429,17 +470,23 @@ if (!Array.isArray(target) && Object.hasOwn(target, /** @type {string} */(prop))
 	/**
 	 * Recursively replace every nested JSON object/array in `obj` with its
 	 * light proxy, so that all values reachable from the cache are already
-	 * wrapped and reads need no `get` trap.
+	 * wrapped and reads need no `get` trap. Light proxies owned by another
+	 * instance are detached (copied) before being re-wrapped here.
 	 * @param {Record<string, any>} obj
 	 * @param {DeepProxyHandler} handler
 	 */
 	static _eagerWrap(obj, handler) {
 		for (const key of Object.keys(obj)) {
-			const val = obj[key];
-			if (val !== null && typeof val === "object" && !knownDeepProxies.has(val) && (Array.isArray(val) || isPlainObject(val))) {
-				obj[key] = createLightDeepProxy(val, handler);
-				JSONDebounceStorage._eagerWrap(val, handler);
+			let val = obj[key];
+			if (val === null || typeof val !== "object" || !(Array.isArray(val) || isPlainObject(val))) continue;
+			if (knownDeepProxies.has(val)) {
+				if (deepProxyOwners.get(val) === handler) continue;
+				// Proxy from another instance: detach it, or writes through this
+				// cache would be routed to that storage's updater.
+				val = detachForeignProxy(val);
 			}
+			obj[key] = createLightDeepProxy(val, handler);
+			JSONDebounceStorage._eagerWrap(val, handler);
 		}
 	}
 	/** @type {ReturnType<typeof createLightDeepProxy>} */
@@ -894,8 +941,6 @@ class FlatJSONStorage extends StorageInterface {
 		};
 		for (const flatKey of subKeys) {
 			if (!this.cache.has(flatKey) && !this.arrayDebouncers.has(flatKey)) {
-// Let the adapter load persisted array contents; handleGetHandlerResult initializes the debouncer from that value.
-				}
 				const value = this.adapter.get(flatKey);
 				if (value instanceof Promise) {
 					promises.push(value.then(realValue => handleGetHandlerResult(flatKey, realValue)));

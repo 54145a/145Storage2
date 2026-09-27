@@ -100,6 +100,47 @@ await test("should handle delete property", async () => {
   assert.equal(raw.b, 2);
 });
 
+await test("assigning another instance's value must not route writes to that instance", async () => {
+  clearLocalStorage();
+  const a = new WebStorageItemStorage("test_xinst_a", localStorage);
+  const b = new WebStorageItemStorage("test_xinst_b", localStorage);
+  a.data.cfg = { n: 1 };
+  b.data.cfg = { n: 0 };
+  await new Promise((r) => setTimeout(r, 150));
+  // A's cached value is a light proxy bound to A's updater. Storing it in B
+  // (directly and nested in a fresh object) must hand B an isolated copy,
+  // otherwise these writes land in A's backing store.
+  b.data.cfg = a.data.cfg;
+  b.data.cfg.n = 42;
+  b.data.pack = { inner: a.data.cfg };
+  b.data.pack.inner.n = 7;
+  await new Promise((r) => setTimeout(r, 150));
+  const rawA = JSON.parse(localStorage.getItem("test_xinst_a") || "{}");
+  const rawB = JSON.parse(localStorage.getItem("test_xinst_b") || "{}");
+  assert.equal(rawB.cfg.n, 42);
+  assert.equal(rawB.pack.inner.n, 7);
+  assert.equal(rawA.cfg.n, 1);
+});
+
+await test("user Symbol writes warn and are never persisted", async () => {
+  clearLocalStorage();
+  const storage = new WebStorageItemStorage("test_symbol_set", localStorage);
+  storage.data.count = 1;
+  await new Promise((r) => setTimeout(r, 150));
+  let asserts = 0;
+  const originalAssert = console.assert;
+  console.assert = () => { asserts++; };
+  storage.data[Symbol("user")] = "secret";
+  storage.data[Symbol.iterator] = "builtin";
+  await new Promise((r) => setTimeout(r, 150));
+  console.assert = originalAssert;
+  // JSON cannot represent a Symbol key: the write must be reported, not
+  // silently accepted as "persisted". Built-in Symbols pass through quietly.
+  assert.equal(asserts, 1);
+  const raw = JSON.parse(localStorage.getItem("test_symbol_set") || "{}");
+  assert.deepEqual(raw, { count: 1 });
+});
+
 // #endregion
 
 // #region FlatWebStorage Tests
@@ -138,6 +179,24 @@ await test("should handle array push with debouncing", async () => {
   await new Promise((r) => setTimeout(r, 150));
   const items = await flat.get`items`;
   assert.deepEqual(items, ["a", "b", "c"]);
+});
+
+await test("replacing an array persists it and a new instance reloads it", async () => {
+  clearLocalStorage();
+  const flat = new FlatWebStorage({ namespace: "t_arr_repl", instance: localStorage });
+  await flat.init();
+  await flat.load("");
+  // The debouncer replays a replacement onto its own array with splice(), where
+  // every index write is already Object.is-equal — the no-op write fast path
+  // must not swallow the flush (regression: the key stayed at []).
+  flat.data.items = ["a", "b"];
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(JSON.parse(localStorage.getItem("t_arr_repl:items") || "null"), ["a", "b"]);
+  // A fresh instance reads the array through the adapter, so the stored
+  // contents must reach the debouncer instead of an empty one.
+  const fresh = new FlatWebStorage({ namespace: "t_arr_repl", instance: localStorage });
+  await fresh.init();
+  assert.deepEqual(await fresh.get`items`, ["a", "b"]);
 });
 
 await test("template string get should return correct value", async () => {

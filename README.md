@@ -149,7 +149,7 @@ Issues, PRs, and suggestions are super welcome! Let's make state persistence ele
 
 Repo layout:
 
-- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
+- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts` + `example.js`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
 - `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and gitignored — don't commit or hand-edit it. It is rebuilt at publish time and shipped inside the package.
 - `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
 - `example.js` is the runnable quick-start injected into the "Try it now" section — it's executed by `pnpm example` and type-checked by `tsc`, so the README examples can't drift from real behavior.
@@ -161,7 +161,7 @@ Repo layout:
 ```typescript
 /**
  * @author 145a
- * @license AGPL-3.0
+ * @license LGPL-3.0-or-later
  */
 export type DeepProxyHandler = {
     has?: (target: Object, key: string) => boolean;
@@ -198,7 +198,10 @@ declare class DeepProxyWrapExempt {
  * reachable nested value must already be wrapped by the caller (`_eagerWrap`)
  * so reads are pure native property access through the proxy boundary.
  * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
- * {@link createFullDeepProxy}.
+ * {@link createFullDeepProxy}. Symbol handling is identical there: built-in
+ * Symbols pass through to `Reflect`, user-defined Symbols get a
+ * `console.assert` notice and never reach `handler` — a value JSON cannot
+ * serialize must not be reported as persisted.
  * @param {object} target
  * @param {DeepProxyHandler} handler
  * @returns {*}
@@ -274,7 +277,8 @@ declare class JSONDebounceStorage extends DebounceStorage {
     /**
      * Recursively replace every nested JSON object/array in `obj` with its
      * light proxy, so that all values reachable from the cache are already
-     * wrapped and reads need no `get` trap.
+     * wrapped and reads need no `get` trap. Light proxies owned by another
+     * instance are detached (copied) before being re-wrapped here.
      * @param {Record<string, any>} obj
      * @param {DeepProxyHandler} handler
      */
