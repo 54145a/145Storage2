@@ -389,7 +389,7 @@ class JSONDebounceStorage extends DebounceStorage {
 			 * @param {object|undefined} receiver
 			 */
 			set: (target, prop, value, receiver) => {
-				if (Object.hasOwn(target, /** @type {string} */(prop)) && Object.is((/** @type {Record<string|symbol, any>} */ (target))[/** @type {string} */ (prop)], value)) return true;
+if (!Array.isArray(target) && Object.hasOwn(target, /** @type {string} */(prop)) && Object.is((/** @type {Record<string|symbol, any>} */ (target))[/** @type {string} */ (prop)], value)) return true;
 				assertIsJSONStorageStorableValue(value);
 				onSet(value, prop);
 				this.requestUpdate();
