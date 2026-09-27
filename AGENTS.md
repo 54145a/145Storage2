@@ -5,7 +5,7 @@
 - `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` and JSDoc types. There is no `.ts` source for the library; `tsconfig.json` type-checks it via `checkJs`.
 - `tsconfig.json` (`noEmit`) type-checks the project (`storage.js` + `test.ts`); `scripts/tsconfig.json` (extends it) type-checks the tooling scripts with node types (`buildDocs.ts`, `bench.js`); `tsconfig.build.json` (extends it too) emits `storage.d.ts` from `storage.js` only.
 - `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) from `storage.js` and is **gitignored — never committed**. Don't edit it by hand; rebuild after changing `storage.js`. It is built by the `prepublishOnly` script and shipped inside the published package via the `files` whitelist in `package.json`.
-- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `test.ts` + `storage.d.ts`. Edit `README_template.md`, never `README.md`.
+- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts`. Edit `README_template.md`, never `README.md`.
 - `test.ts` is the only test file (plain `node:assert` + console runner, no test framework).
 - `typedoc.json` builds the showcase site with **TypeDoc** from `storage.js` (JSDoc → API docs), rendering `README.md` as the front page. It runs via `pnpm dlx` with pinned `typescript@6.0.3` because **TypeDoc doesn't support the repo's TS 7 yet** — never bump those pins. `buildDocs.ts` spawns it (as `pnpm site`), so `pnpm build` produces README + site in one flow.
 - `.github/workflows/deploy-docs.yml` deploys `docs/dist` to GitHub Pages (official `configure/upload/deploy-pages` actions; Pages source must be set to "GitHub Actions" in repo settings).
