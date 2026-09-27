@@ -150,7 +150,7 @@ Issues, PRs, and suggestions are super welcome! Let's make state persistence ele
 Repo layout:
 
 - `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
-- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and committed — rebuild, don't hand-edit.
+- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and gitignored — don't commit or hand-edit it. It is rebuilt at publish time and shipped inside the package.
 - `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
 - `example.js` is the runnable quick-start injected into the "Try it now" section — it's executed by `pnpm example` and type-checked by `tsc`, so the README examples can't drift from real behavior.
 - `test.ts` is the test file (plain `node:assert` + console runner, no test framework).
