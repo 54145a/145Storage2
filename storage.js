@@ -894,13 +894,7 @@ class FlatJSONStorage extends StorageInterface {
 		};
 		for (const flatKey of subKeys) {
 			if (!this.cache.has(flatKey) && !this.arrayDebouncers.has(flatKey)) {
-				const flatNode = this._getSchemaNode(flatKey);
-				if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
-					// DEBOUNCE_ARRAY keys are managed by the debouncer, not the
-					// adapter (the set handler never writes them to the adapter).
-					// Initialize the debouncer; data arrives on first access.
-					this._getArrayDebouncer(flatKey, []);
-					continue;
+// Let the adapter load persisted array contents; handleGetHandlerResult initializes the debouncer from that value.
 				}
 				const value = this.adapter.get(flatKey);
 				if (value instanceof Promise) {
