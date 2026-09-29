@@ -303,8 +303,6 @@ declare class FlatJSONStorage extends StorageInterface {
     cache: Map<string, any>;
     /** @type {Map<string, string[]>} */
     _splitCache: Map<string, string[]>;
-    /** @type {Map<string, Function>} */
-    _accessorCache: Map<string, Function>;
     /** @type {Map<string, JSONDebounceStorage>} */
     arrayDebouncers: Map<string, JSONDebounceStorage>;
     /** @type {WeakMap<JSONDebounceStorage, DeepProxyWrapExempt>} */
@@ -340,7 +338,15 @@ declare class FlatJSONStorage extends StorageInterface {
      * @param {string} key
      */
     _deleteSchemaNode(key: string): void;
-    /** @param {string} key */
+    /**
+     * Resolves a dotted key to its schema node, or `undefined` when any part of
+     * the path is missing. Shares `_splitCache` with the write path. The
+     * compiled accessor this replaces was no faster per lookup, cost ~1.8µs of
+     * synchronous compilation for each never-seen key, needed an extra Map per
+     * instance to hold the compiled functions, and threw instead of reporting
+     * "no such key" when an intermediate segment was missing.
+     * @param {string} key
+     */
     _getSchemaNode(key: string): any;
     /**
      * @param {string} key

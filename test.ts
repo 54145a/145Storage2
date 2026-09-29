@@ -274,6 +274,54 @@ await test("getSubKeys on empty FLAT_LINK should return [] not string indices", 
   assert.deepEqual(keys, [], `Expected empty subkeys for empty FLAT_LINK, got: [${keys}]`);
 });
 
+await test("enumeration stays correct while keys are added, replaced and removed", async () => {
+  clearLocalStorage();
+  const flat = new FlatWebStorage({ namespace: "t_enum", instance: localStorage });
+  await flat.init();
+  await flat.load("");
+  // Warm the ownKeys/descriptor caches first, then mutate underneath them:
+  // invalidation is per path now, so a stale entry would show up as a key
+  // that no longer exists but still enumerates.
+  flat.data.a = 1;
+  flat.data.b = { c: 2, d: { e: 3 } };
+  assert.deepEqual(Object.keys(flat.data).sort(), ["a", "b"]);
+  flat.data.a = 2;
+  assert.deepEqual(Object.keys(flat.data).sort(), ["a", "b"]);
+  flat.data.b = 5; // branch -> primitive: the former children must vanish
+  assert.deepEqual({ ...flat.data }, { a: 2, b: 5 });
+  assert.equal(JSON.stringify(flat.data), JSON.stringify({ a: 2, b: 5 }));
+  delete flat.data.a;
+  assert.deepEqual(Object.keys(flat.data), ["b"]);
+  flat.data.fresh = { deep: { leaf: 1 } };
+  assert.deepEqual(Object.keys(flat.data).sort(), ["b", "fresh"]);
+  assert.deepEqual(Object.keys(flat.data.fresh), ["deep"]);
+  assert.deepEqual(Object.keys(flat.data.fresh.deep), ["leaf"]); // warms ownKeys("fresh.deep")
+  flat.data.fresh.deep.added = 2;                                // new child of that branch
+  assert.deepEqual(Object.keys(flat.data.fresh.deep).sort(), ["added", "leaf"]);
+  assert.deepEqual(Object.keys(flat.data.fresh), ["deep"]);      // its parent is unchanged
+  const seen: string[] = [];
+  for (const k in flat.data) seen.push(k);
+  assert.deepEqual(seen.sort(), ["b", "fresh"]);
+  assert.equal("deep" in flat.data.fresh, true);
+});
+
+await test("a missing deep path reports undefined instead of throwing", async () => {
+  clearLocalStorage();
+  const flat = new FlatWebStorage({ namespace: "t_missingpath", instance: localStorage });
+  await flat.init();
+  await flat.load("");
+  flat.data.config = { display: { brightness: 80 } };
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(flat.data.nothing, undefined);
+  assert.equal(flat.data.config.nope, undefined);
+  assert.equal("nope" in flat.data.config, false);
+  // These resolve a multi-segment path that does not exist: the schema lookup
+  // used to throw (and `load`/`get` propagated it) instead of reporting "no such key".
+  assert.equal(flat.getSubKeys("nope.deeper").length, 0);
+  assert.equal(await flat.load("nope.deeper"), undefined);
+  assert.equal(await flat.get`nope.deeper`, undefined);
+});
+
 await test("nested object deep set should auto-persist leaf", async () => {
   clearLocalStorage();
   const flat = new FlatWebStorage({ namespace: "t_deep", instance: localStorage });
