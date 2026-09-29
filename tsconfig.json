@@ -16,6 +16,7 @@
 	},
 	"include": [
 		"storage.js",
-		"test.ts"
+		"test.ts",
+		"example.js"
 	]
 }

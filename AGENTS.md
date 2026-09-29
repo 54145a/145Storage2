@@ -4,8 +4,8 @@
 
 - `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` and JSDoc types. There is no `.ts` source for the library; `tsconfig.json` type-checks it via `checkJs`.
 - `tsconfig.json` (`noEmit`) type-checks the project (`storage.js` + `test.ts`); `scripts/tsconfig.json` (extends it) type-checks the tooling scripts with node types (`buildDocs.ts`, `bench.js`); `tsconfig.build.json` (extends it too) emits `storage.d.ts` from `storage.js` only.
-- `storage.d.ts` is **generated** and committed. Don't edit it by hand; rebuild after changing `storage.js`.
-- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `test.ts` + `storage.d.ts`. Edit `README_template.md`, never `README.md`.
+- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) from `storage.js` and is **gitignored — never committed**. Don't edit it by hand; rebuild after changing `storage.js`. It is built by the `prepublishOnly` script and shipped inside the published package via the `files` whitelist in `package.json`.
+- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts`. Edit `README_template.md`, never `README.md`.
 - `test.ts` is the only test file (plain `node:assert` + console runner, no test framework).
 - `typedoc.json` builds the showcase site with **TypeDoc** from `storage.js` (JSDoc → API docs), rendering `README.md` as the front page. It runs via `pnpm dlx` with pinned `typescript@6.0.3` because **TypeDoc doesn't support the repo's TS 7 yet** — never bump those pins. `buildDocs.ts` spawns it (as `pnpm site`), so `pnpm build` produces README + site in one flow.
 - `.github/workflows/deploy-docs.yml` deploys `docs/dist` to GitHub Pages (official `configure/upload/deploy-pages` actions; Pages source must be set to "GitHub Actions" in repo settings).
@@ -31,7 +31,7 @@ pnpm site        # TypeDoc build → docs/dist (site only; buildDocs.ts runs thi
 ## Conventions / gotchas
 
 - `storage.js` is dependency-free: `FlatUnstorage` accepts an unstorage `Storage` instance (type-only import in JSDoc). Users create their own storage; `unstorage` is a devDependency only.
-- Debounced writes flush asynchronously (`updateDelayMs`, default 100ms) — tests always `await setTimeout(150)` before asserting on raw storage.
+- Only the `JSONDebounceStorage` paths are debounced (`updateDelayMs`, default 100ms): whole-blob storages (`WebStorageItemStorage`) and `DEBOUNCE_ARRAY` keys. `FlatJSONStorage` writes `PRIMITIVE`/`FLAT_LINK` leaves to the adapter **synchronously** — `flat.data.count = 1` is in the backing store before the statement returns, and only the array key waits. Tests still `await setTimeout(150)` before asserting on raw storage.
 - `FlatJSONStorage.load(key?)` is synchronous when the key is cached, returns a Promise otherwise — tests assert this explicitly.
 - Template-tag get API: `flat.get\`key\`` (async) — the README and tests lean on this.
 - `FlatUnstorage` is **always async** (unstorage's `getItem`/`setItem` are Promise-based): sync reads after a cache miss throw `Key not loaded ... 'await load()'`. Must `await load()` or use `flat.get\`...\``.
@@ -39,5 +39,5 @@ pnpm site        # TypeDoc build → docs/dist (site only; buildDocs.ts runs thi
   - Primitive strings round-trip via `String()` + `destr`, so literals like `"{}"`, `"[]"`, `"0"`, `"true"`/`"false"`, `"null"` come back as other types — don't store those exact strings.
   - `normalizeKey` rewrites `/` `\` `?` and strips leading/trailing `:` in keys; `a/b` collides with `a:b`.
   - The schema markers are safe: the whole schema lives in one JSON document under `__145Storage__flatSchema__`, and `getSchemaNodeValueType` also accepts object/array markers.
-- Symbol properties are unsupported by `createDeepProxy` (asserted via `console.assert`).
-- License is AGPL-3.0-only; headers on `storage.js` say `@license AGPL-3.0`.
+- Symbol properties are unsupported by **both** proxies (`createFullDeepProxy` and `createLightDeepProxy`): a user Symbol gets a `console.assert` notice and never reaches the handler, so it is never persisted. Built-in Symbols pass through.
+- License is LGPL-3.0-or-later; headers on `storage.js` say `@license LGPL-3.0-or-later`.
