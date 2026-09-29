@@ -199,6 +199,24 @@ await test("replacing an array persists it and a new instance reloads it", async
   assert.deepEqual(await fresh.get`items`, ["a", "b"]);
 });
 
+await test("flat leaves persist immediately, only array keys are debounced", async () => {
+  clearLocalStorage();
+  const flat = new FlatWebStorage({ namespace: "t_debounce", instance: localStorage });
+  await flat.init();
+  await flat.load("");
+  // Documented asymmetry: requestUpdate() only backs DEBOUNCE_ARRAY keys and
+  // whole-blob storages. A single value reaches the adapter before the
+  // assignment statement returns.
+  flat.data.count = 1;
+  flat.data.cfg = { theme: "dark" };
+  assert.equal(localStorage.getItem("t_debounce:count"), "1");
+  assert.equal(localStorage.getItem("t_debounce:cfg.theme"), JSON.stringify("dark"));
+  flat.data.items = [1];
+  assert.equal(localStorage.getItem("t_debounce:items"), null);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(JSON.parse(localStorage.getItem("t_debounce:items") || "null"), [1]);
+});
+
 await test("template string get should return correct value", async () => {
   clearLocalStorage();
   const flat = new FlatWebStorage({ namespace: "t_tpl", instance: localStorage });

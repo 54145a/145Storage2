@@ -23,7 +23,7 @@ settings.count += 1;
 
 - 🪄 **Deep Reactive Proxy**: Modify any nested property, and it saves automatically.
 - 🏗️ **Innovative Flat Storage**: Breaks down nested JSON objects into flat Key-Value pairs. No need to serialize the entire object just to update a deep property!
-- ⚡ **Smart Debouncing**: Automatically merges frequent writes (like array operations) for extreme performance.
+- ⚡ **Smart Debouncing**: Array keys and whole-blob writes are merged into a single flush, while a single value persists immediately — no waiting.
 - 🔒 **Type Safety**: Blocks un-storable values (like `undefined` or `function`) to keep your storage safe.
 - 🌐 **Framework Agnostic**: Works in any vanilla JS or framework environment.
 

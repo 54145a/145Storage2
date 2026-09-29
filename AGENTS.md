@@ -31,7 +31,7 @@ pnpm site        # TypeDoc build → docs/dist (site only; buildDocs.ts runs thi
 ## Conventions / gotchas
 
 - `storage.js` is dependency-free: `FlatUnstorage` accepts an unstorage `Storage` instance (type-only import in JSDoc). Users create their own storage; `unstorage` is a devDependency only.
-- Debounced writes flush asynchronously (`updateDelayMs`, default 100ms) — tests always `await setTimeout(150)` before asserting on raw storage.
+- Only the `JSONDebounceStorage` paths are debounced (`updateDelayMs`, default 100ms): whole-blob storages (`WebStorageItemStorage`) and `DEBOUNCE_ARRAY` keys. `FlatJSONStorage` writes `PRIMITIVE`/`FLAT_LINK` leaves to the adapter **synchronously** — `flat.data.count = 1` is in the backing store before the statement returns, and only the array key waits. Tests still `await setTimeout(150)` before asserting on raw storage.
 - `FlatJSONStorage.load(key?)` is synchronous when the key is cached, returns a Promise otherwise — tests assert this explicitly.
 - Template-tag get API: `flat.get\`key\`` (async) — the README and tests lean on this.
 - `FlatUnstorage` is **always async** (unstorage's `getItem`/`setItem` are Promise-based): sync reads after a cache miss throw `Key not loaded ... 'await load()'`. Must `await load()` or use `flat.get\`...\``.
