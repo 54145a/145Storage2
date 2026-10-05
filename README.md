@@ -1,7 +1,7 @@
 # 📦 145 Storage 2: My KV is a **plain Object**
 
 [![npm version](https://img.shields.io/npm/v/@54145a/storage2.svg)](https://www.npmjs.com/package/@54145a/storage2)[![license](https://img.shields.io/npm/l/@54145a/storage2.svg)](./LICENSE)[![GitHub stars](https://img.shields.io/github/stars/54145a/145Storage2.svg)](https://github.com/54145a/145Storage2)
-> A lightweight, smart JavaScript storage library that makes state persistence as easy as modifying a plain object.
+> A JavaScript storage library that uses property accessor syntax, making state persistence as simple as modifying a plain object.
 
 ## Why 145 Storage 2
 
@@ -23,336 +23,66 @@ settings.count += 1;
 
 - 🪄 **Deep Reactive Proxy**: Modify any nested property, and it saves automatically.
 - 🏗️ **Innovative Flat Storage**: Breaks down nested JSON objects into flat Key-Value pairs. No need to serialize the entire object just to update a deep property!
-- ⚡ **Smart Debouncing**: Automatically merges frequent writes (like array operations) for extreme performance.
+- ⚡ **Smart Debouncing**: Array keys and whole-blob writes are merged into a single flush, while a single value persists immediately — no waiting.
 - 🔒 **Type Safety**: Blocks un-storable values (like `undefined` or `function`) to keep your storage safe.
 - 🌐 **Framework Agnostic**: Works in any vanilla JS or framework environment.
 
 ## 🚀 Try it now
 
-```typescript
+```sh
+npm i @54145a/storage2
+```
+
+Three storage flavors, one ergonomic idea: edit a plain object and it persists. The tour below is real, executed code (`example.js` — run it yourself with `pnpm example`):
+
+```js
+// Runnable tour of @54145a/storage2. This file is the source of the
+// "🚀 Try it now" block in README.md (injected by scripts/buildDocs.ts).
+// Run it with: pnpm example
 import assert from "node:assert/strict";
 import { WebStorageItemStorage, FlatWebStorage, FlatUnstorage } from "./storage.js";
 import { createStorage } from "unstorage";
 import memory from "unstorage/drivers/memory";
 
+localStorage.clear();
 
-// #region Test Harness
-async function test(name: string, fn: () => void | Promise<void>) {
-  console.log(`  ▶ ${name}`);
-  await fn();
-  console.log(`  ✅ ${name}`);
-}
+// 1) WebStorageItemStorage — one localStorage key, read/written as a plain object.
+const settings = new WebStorageItemStorage("settings", localStorage);
+settings.data.count = (settings.data.count ?? 0) + 1;
+settings.data.user = { name: "alice", prefs: { theme: "dark" } };
+settings.data.user.prefs.theme = "light"; // deep write, no re-serialize
+await settings.update(); // flush now; otherwise it auto-flushes ~100ms later
+console.log("[1] raw localStorage:", localStorage.getItem("settings"));
+assert.equal(JSON.parse(localStorage.getItem("settings") ?? "{}").user.prefs.theme, "light");
 
-function clearLocalStorage() {
-  localStorage.clear();
-}
-// #endregion
+// 2) FlatWebStorage — nested JSON flattened to one KV per leaf: only the
+// touched leaf is written, so updating a deep property never re-serializes
+// the whole object.
+const flat = new FlatWebStorage({ namespace: "app", instance: localStorage });
+await flat.init();
+await flat.load("");
+flat.data.count = 10;
+flat.data.config = { display: { brightness: 80 } };
+flat.data.config.display.brightness = 100; // persists just this leaf
+flat.data.tags ??= [];
+flat.data.tags.push("a", "b"); // array writes are merged/debounced
+console.log("[2] brightness:", await flat.get`config.display.brightness`);
+console.log("[2] tags:      ", await flat.get`tags`);
+console.log("[2] top keys:  ", flat.getSubKeys(""));
+assert.equal(await flat.get`config.display.brightness`, 100);
+assert.deepEqual(await flat.get`tags`, ["a", "b"]);
 
-// #region WebStorageItemStorage Tests
-console.info("\n========================================");
-console.info("WebStorageItemStorage");
-console.info("========================================");
+// 3) FlatUnstorage — the same object syntax over any unstorage backend
+// (memory here; swap in fs / redis / HTTP / Vercel KV, ...). unstorage is
+// async, so always `await load()` up front or read via `flat.get`.
+const kv = new FlatUnstorage({ storage: createStorage({ driver: memory() }) });
+await kv.init();
+await kv.load("");
+kv.data.user = { name: "bob", prefs: { theme: "solarized" } };
+console.log("[3] theme:", await kv.get`user.prefs.theme`);
+assert.equal(await kv.get`user.prefs.theme`, "solarized");
 
-await test("should auto-persist data on property set", async () => {
-  clearLocalStorage();
-  const storage = new WebStorageItemStorage("test_settings", localStorage);
-  storage.data.count = 42;
-  // Allow debounce flush
-  await new Promise((r) => setTimeout(r, 150));
-  const raw = JSON.parse(localStorage.getItem("test_settings") || "{}");
-  assert.equal(raw.count, 42);
-});
-
-await test("should load existing data from localStorage", async () => {
-  clearLocalStorage();
-  localStorage.setItem("test_existing", JSON.stringify({ name: "alice", level: 5 }));
-  const storage = new WebStorageItemStorage("test_existing", localStorage);
-  assert.equal(storage.data.name, "alice");
-  assert.equal(storage.data.level, 5);
-});
-
-await test("should initialize with empty object when key missing", async () => {
-  clearLocalStorage();
-  const storage = new WebStorageItemStorage("test_missing", localStorage);
-  assert.deepEqual(storage.data, {});
-});
-
-await test("should persist nested object modifications", async () => {
-  clearLocalStorage();
-  const storage = new WebStorageItemStorage("test_nested", localStorage);
-  storage.data.user = { name: "bob", prefs: { theme: "dark" } };
-  await new Promise((r) => setTimeout(r, 150));
-  const raw = JSON.parse(localStorage.getItem("test_nested") || "{}");
-  assert.equal(raw.user.prefs.theme, "dark");
-});
-
-await test("should handle delete property", async () => {
-  clearLocalStorage();
-  const storage = new WebStorageItemStorage("test_delete", localStorage);
-  storage.data.a = 1;
-  storage.data.b = 2;
-  await new Promise((r) => setTimeout(r, 150));
-  delete storage.data.a;
-  await new Promise((r) => setTimeout(r, 150));
-  const raw = JSON.parse(localStorage.getItem("test_delete") || "{}");
-  assert.equal(raw.a, undefined);
-  assert.equal(raw.b, 2);
-});
-// #endregion
-
-// #region FlatWebStorage Tests
-
-console.info("\n========================================");
-console.info("FlatWebStorage");
-console.info("========================================");
-
-await test("init should complete without error", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_init", instance: localStorage });
-  await flat.init();
-  assert.equal(flat.isReady, true);
-});
-
-await test("should store and retrieve a simple value", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_simple", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.count = 10;
-  await new Promise((r) => setTimeout(r, 150));
-  const val = await flat.get`count`;
-  assert.equal(val, 10);
-});
-
-await test("should handle array push with debouncing", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_arr", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.items ??= [];
-  flat.data.items.push("a");
-  flat.data.items.push("b");
-  flat.data.items.push("c");
-  await new Promise((r) => setTimeout(r, 150));
-  const items = await flat.get`items`;
-  assert.deepEqual(items, ["a", "b", "c"]);
-});
-
-await test("template string get should return correct value", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_tpl", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.username = "charlie";
-  await new Promise((r) => setTimeout(r, 150));
-  const result = await flat.get`username`;
-  assert.equal(result, "charlie");
-});
-
-await test("sync read via proxy after cache clear should work", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_sync", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.val = 99;
-  await new Promise((r) => setTimeout(r, 150));
-  flat.cache.clear();
-  flat.arrayDebouncers.clear();
-  const syncVal = flat.data.val;
-  assert.equal(syncVal, 99);
-});
-
-await test("load() should return synchronously for cached keys", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_loadsync", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.x = 7;
-  await new Promise((r) => setTimeout(r, 150));
-  // Already loaded, so load("x") should be synchronous
-  const result = flat.load("x");
-  assert.equal(result instanceof Promise, false, "load('x') should be synchronous when cached");
-  assert.equal(result, 7);
-});
-
-await test("delete should remove a key", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_del", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.toRemove = "bye";
-  await new Promise((r) => setTimeout(r, 150));
-  await flat.delete("toRemove");
-  const val = await flat.get`toRemove`;
-  assert.equal(val, undefined);
-});
-
-await test("getSubKeys should list child keys", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_subkeys", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.alpha = 1;
-  flat.data.beta = 2;
-  flat.data.gamma = 3;
-  await new Promise((r) => setTimeout(r, 150));
-  const keys = flat.getSubKeys("");
-  assert.ok(keys.includes("alpha"), `Expected 'alpha' in subkeys, got: [${keys}]`);
-  assert.ok(keys.includes("beta"), `Expected 'beta' in subkeys, got: [${keys}]`);
-  assert.ok(keys.includes("gamma"), `Expected 'gamma' in subkeys, got: [${keys}]`);
-});
-
-await test("getSubKeys on empty FLAT_LINK should return [] not string indices", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_emptylink", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.config = {};
-  await new Promise((r) => setTimeout(r, 150));
-  const keys = flat.getSubKeys("config");
-  assert.deepEqual(keys, [], `Expected empty subkeys for empty FLAT_LINK, got: [${keys}]`);
-});
-
-await test("nested object deep set should auto-persist leaf", async () => {
-  clearLocalStorage();
-  const flat = new FlatWebStorage({ namespace: "t_deep", instance: localStorage });
-  await flat.init();
-  await flat.load("");
-  flat.data.config = { display: { brightness: 80 } };
-  await new Promise((r) => setTimeout(r, 150));
-  flat.data.config.display.brightness = 100;
-  await new Promise((r) => setTimeout(r, 150));
-  const brightness = await flat.get`config.display.brightness`;
-  assert.equal(brightness, 100);
-});
-
-await test("multiple namespaces should be isolated", async () => {
-  clearLocalStorage();
-  const flatA = new FlatWebStorage({ namespace: "iso_a", instance: localStorage });
-  const flatB = new FlatWebStorage({ namespace: "iso_b", instance: localStorage });
-  await flatA.init();
-  await flatB.init();
-  await flatA.load("");
-  await flatB.load("");
-  flatA.data.key = "fromA";
-  flatB.data.key = "fromB";
-  await new Promise((r) => setTimeout(r, 150));
-  assert.equal(await flatA.get`key`, "fromA");
-  assert.equal(await flatB.get`key`, "fromB");
-});
-// #endregion
-
-// #region FlatUnstorage Tests
-
-function makeUnstorage() {
-  return createStorage({ driver: memory() });
-}
-
-console.info("\n========================================");
-console.info("FlatUnstorage");
-console.info("========================================");
-
-await test("unstorage: store and retrieve a simple value", async () => {
-  const flat = new FlatUnstorage({ storage: makeUnstorage() });
-  await flat.init();
-  await flat.load("");
-  flat.data.count = 10;
-  await new Promise((r) => setTimeout(r, 150));
-  assert.equal(await flat.get`count`, 10);
-});
-
-await test("unstorage: can construct from a storage instance", async () => {
-  const flat = new FlatUnstorage({ storage: makeUnstorage() });
-  await flat.init();
-  await flat.load("");
-  flat.data.x = 42;
-  await new Promise((r) => setTimeout(r, 150));
-  assert.equal(await flat.get`x`, 42);
-});
-
-await test("unstorage: persists across instances", async () => {
-  const storage = makeUnstorage();
-  const flatA = new FlatUnstorage({ storage });
-  await flatA.init();
-  await flatA.load("");
-  flatA.data.user = { name: "alice", prefs: { theme: "dark" } };
-  await new Promise((r) => setTimeout(r, 150));
-
-  const flatB = new FlatUnstorage({ storage });
-  await flatB.init();
-  await flatB.load("");
-  assert.equal(await flatB.get`user.prefs.theme`, "dark");
-});
-
-await test("unstorage: namespaces are isolated", async () => {
-  const storage = makeUnstorage();
-  const flatA = new FlatUnstorage({ storage, namespace: "ns_a" });
-  const flatB = new FlatUnstorage({ storage, namespace: "ns_b" });
-  await flatA.init();
-  await flatB.init();
-  await flatA.load("");
-  await flatB.load("");
-  flatA.data.key = "fromA";
-  flatB.data.key = "fromB";
-  await new Promise((r) => setTimeout(r, 150));
-  assert.equal(await flatA.get`key`, "fromA");
-  assert.equal(await flatB.get`key`, "fromB");
-});
-
-await test("unstorage: load() returns a Promise for async adapters", async () => {
-  const flat = new FlatUnstorage({ storage: makeUnstorage() });
-  await flat.init();
-  await flat.load("");
-  flat.data.val = 99;
-  await new Promise((r) => setTimeout(r, 150));
-  flat.cache.clear();
-  flat.arrayDebouncers.clear();
-  const result = flat.load("val");
-  assert.equal(result instanceof Promise, true, "load() should be async for unstorage");
-  assert.equal(await result, 99);
-});
-
-await test("unstorage: sync read after cache clear throws", async () => {
-  const flat = new FlatUnstorage({ storage: makeUnstorage() });
-  await flat.init();
-  await flat.load("");
-  flat.data.val = 99;
-  await new Promise((r) => setTimeout(r, 150));
-  flat.cache.clear();
-  flat.arrayDebouncers.clear();
-  assert.throws(() => { flat.data.val; }, /not loaded/);
-});
-
-await test("unstorage: delete should remove a key", async () => {
-  const flat = new FlatUnstorage({ storage: makeUnstorage() });
-  await flat.init();
-  await flat.load("");
-  flat.data.toRemove = "bye";
-  await new Promise((r) => setTimeout(r, 150));
-  await flat.delete("toRemove");
-  assert.equal(await flat.get`toRemove`, undefined);
-});
-
-await test("unstorage: array push with debouncing", async () => {
-  const flat = new FlatUnstorage({ storage: makeUnstorage() });
-  await flat.init();
-  await flat.load("");
-  flat.data.items ??= [];
-  flat.data.items.push("a");
-  flat.data.items.push("b");
-  await new Promise((r) => setTimeout(r, 150));
-  assert.deepEqual(await flat.get`items`, ["a", "b"]);
-});
-
-await test("unstorage: requires storage or driver", () => {
-  // @ts-ignore - testing that missing storage throws
-  assert.throws(() => new FlatUnstorage({}), /storage/i);
-});
-// #endregion
-
-// #region Done
-console.info("\n🎉 All tests passed!");
-// #endregion
+console.log("\n🎉 example.js ran clean — all assertions passed.");
 ```
 
 ---
@@ -419,10 +149,11 @@ Issues, PRs, and suggestions are super welcome! Let's make state persistence ele
 
 Repo layout:
 
-- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
-- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and committed — rebuild, don't hand-edit.
-- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `test.ts` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
-- `test.ts` is the only test file (plain `node:assert` + console runner, no test framework).
+- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts` + `example.js`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
+- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and gitignored — don't commit or hand-edit it. It is rebuilt at publish time and shipped inside the package.
+- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
+- `example.js` is the runnable quick-start injected into the "Try it now" section — it's executed by `pnpm example` and type-checked by `tsc`, so the README examples can't drift from real behavior.
+- `test.ts` is the test file (plain `node:assert` + console runner, no test framework).
 - `typedoc.json` builds the showcase site with **TypeDoc** (API docs from the `storage.js` JSDoc, this README as front page) — `buildDocs.ts` runs it via `pnpm site`, so `pnpm build` outputs `docs/dist` in one flow.
 
 ## 📚 Reference
@@ -430,7 +161,7 @@ Repo layout:
 ```typescript
 /**
  * @author 145a
- * @license AGPL-3.0
+ * @license LGPL-3.0-or-later
  */
 export type DeepProxyHandler = {
     has?: (target: Object, key: string) => boolean;
@@ -450,7 +181,7 @@ export type DeepProxyHandler = {
  * @property {(target: Object, key: string, prop: string | symbol) => PropertyDescriptor | undefined} [getOwnPropertyDescriptor]
  */
 /**
- * @see createDeepProxy
+ * @see createFullDeepProxy
  */
 declare class DeepProxyWrapExempt {
     value: any;
@@ -460,18 +191,22 @@ declare class DeepProxyWrapExempt {
     constructor(value: any);
 }
 /**
- * Creates a deep Proxy that reports every property access as a dot-separated key
- * (e.g. `"user.profile.name"`) to `handler`, nesting a proxy for each object.
- * Symbol properties are prohibited (except the 15 ECMAScript built-in Symbols
- * like `Symbol.iterator`, `Symbol.toPrimitive`, etc.). User-defined Symbols
- * trigger a `console.assert` notice and are silently ignored — they never
- * reach `handler`. This is by design: JSON storage cannot serialize Symbols.
+ * The lightweight deep proxy: only the traps a JSON cache actually needs
+ * (`set`, `deleteProperty`). No path tracking, no get trap, no pass-through
+ * `has` / `ownKeys` / `getOwnPropertyDescriptor` traps — those fall back to
+ * V8's native default path, keeping key enumeration and spread fast. Every
+ * reachable nested value must already be wrapped by the caller (`_eagerWrap`)
+ * so reads are pure native property access through the proxy boundary.
+ * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
+ * {@link createFullDeepProxy}. Symbol handling is identical there: built-in
+ * Symbols pass through to `Reflect`, user-defined Symbols get a
+ * `console.assert` notice and never reach `handler` — a value JSON cannot
+ * serialize must not be reported as persisted.
  * @param {object} target
  * @param {DeepProxyHandler} handler
- * @param {string} [currentKey=""]
  * @returns {*}
  */
-declare function createDeepProxy(target: object, handler: DeepProxyHandler, currentKey?: string): any;
+declare function createLightDeepProxy(target: object, handler: DeepProxyHandler): any;
 declare class StorageInterface {
     scheduledUpdate: boolean | undefined;
     /**
@@ -504,7 +239,11 @@ declare class DebounceStorage extends StorageInterface {
      * @param {Exclude<any, undefined>} initialValue
      * @param {(value: any)=>Promise<void>|void} updator
      * @param {number} updateDelayMs
-     * @param {boolean} structuredCloneExempt Use raw initialValue as cache. DO NOT MODIFY THE OBJECT EVER IF YOU ENABLE THIS.
+     * @param {boolean} structuredCloneExempt When `true`, the user guarantees they
+     * will not modify `initialValue` after construction, so the cache holds the
+     * original object directly (no clone). Without this flag (the default), the
+     * user may freely modify their object, so we `structuredClone` it to keep
+     * an isolated private cache. Eager proxy wrapping is always applied regardless.
      */
     constructor(initialValue: Exclude<any, undefined>, updator: (value: any) => Promise<void> | void, updateDelayMs?: number, structuredCloneExempt?: boolean);
     /** @returns {Promise<void>|void} */
@@ -517,19 +256,35 @@ declare class DebounceStorage extends StorageInterface {
     update(): Promise<void>;
     requestUpdate(): void;
 }
+/**
+ * @extends {DebounceStorage}
+ */
 declare class JSONDebounceStorage extends DebounceStorage {
     /**
      * @param {object} initialValue
      * @param {(value: Object)=>Promise<void>|void} updator
      * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
+     * `onSet` is called with the assigned value and the leaf property name
+     * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
+     * It fires only when the value actually changes — identical-value
+     * assignments are short-circuited before reaching `onSet`.
      */
     constructor(initialValue: object, updator: (value: Object) => Promise<void> | void, { updateDelayMs, structuredCloneExempt, onSet }?: {
         updateDelayMs?: number;
         structuredCloneExempt?: boolean;
         onSet?: (value: Object, key: string) => void;
     });
-    /** @type {ReturnType<typeof createDeepProxy>} */
-    _data: ReturnType<typeof createDeepProxy>;
+    /**
+     * Recursively replace every nested JSON object/array in `obj` with its
+     * light proxy, so that all values reachable from the cache are already
+     * wrapped and reads need no `get` trap. Light proxies owned by another
+     * instance are detached (copied) before being re-wrapped here.
+     * @param {Record<string, any>} obj
+     * @param {DeepProxyHandler} handler
+     */
+    static _eagerWrap(obj: Record<string, any>, handler: DeepProxyHandler): void;
+    /** @type {ReturnType<typeof createLightDeepProxy>} */
+    _data: ReturnType<typeof createLightDeepProxy>;
 }
 export type FlatStorageAdapter = {
     get: (key: string) => Promise<any> | any;
@@ -548,8 +303,6 @@ declare class FlatJSONStorage extends StorageInterface {
     cache: Map<string, any>;
     /** @type {Map<string, string[]>} */
     _splitCache: Map<string, string[]>;
-    /** @type {Map<string, Function>} */
-    _accessorCache: Map<string, Function>;
     /** @type {Map<string, JSONDebounceStorage>} */
     arrayDebouncers: Map<string, JSONDebounceStorage>;
     /** @type {WeakMap<JSONDebounceStorage, DeepProxyWrapExempt>} */
@@ -585,7 +338,15 @@ declare class FlatJSONStorage extends StorageInterface {
      * @param {string} key
      */
     _deleteSchemaNode(key: string): void;
-    /** @param {string} key */
+    /**
+     * Resolves a dotted key to its schema node, or `undefined` when any part of
+     * the path is missing. Shares `_splitCache` with the write path. The
+     * compiled accessor this replaces was no faster per lookup, cost ~1.8µs of
+     * synchronous compilation for each never-seen key, needed an extra Map per
+     * instance to hold the compiled functions, and threw instead of reporting
+     * "no such key" when an intermediate segment was missing.
+     * @param {string} key
+     */
     _getSchemaNode(key: string): any;
     /**
      * @param {string} key
@@ -622,6 +383,9 @@ declare class FlatJSONStorage extends StorageInterface {
      */
     delete(key?: string): Promise<void>;
 }
+/**
+ * @extends {JSONDebounceStorage}
+ */
 declare class WebStorageItemStorage extends JSONDebounceStorage {
     /**
      * @param {string} itemName

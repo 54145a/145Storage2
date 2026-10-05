@@ -2,17 +2,17 @@ import { readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 
 async function buildReadme() {
-	const [template, test, dts] = await Promise.all([
+	const [template, example, dts] = await Promise.all([
 		readFile("README_template.md", "utf8"),
-		readFile("test.ts", "utf8"),
+		readFile("example.js", "utf8"),
 		readFile("storage.d.ts", "utf8")
 	]);
 	const readme = template.replace(
 		"{{DTS}}",
 		dts.trimEnd()
 	).replace(
-		"{{TEST}}",
-		test.trimEnd()
+		"{{EXAMPLE}}",
+		example.trimEnd()
 	);
 	await writeFile("README.md", readme, "utf8");
 }
