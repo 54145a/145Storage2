@@ -16,7 +16,8 @@
 	},
 	"include": [
 		"storage.js",
-		"test.ts",
-		"example.js"
+		"example.js",
+		"vitest.config.ts",
+		"test/**/*.ts"
 	]
 }
