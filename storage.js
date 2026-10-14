@@ -465,6 +465,7 @@ class JSONDebounceStorage extends DebounceStorage {
 			JSONDebounceStorage._eagerWrap(value, handler);
 			return proxy;
 		}
+		if (knownDeepProxies.has(this._cache)) this._cache = detachForeignProxy(this._cache);
 		this._data = createLightDeepProxy(this._cache, handler);
 		JSONDebounceStorage._eagerWrap(this._cache, handler);
 		this.init();
