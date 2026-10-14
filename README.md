@@ -263,6 +263,7 @@ declare class DebounceStorage extends StorageInterface {
  * @extends {DebounceStorage}
  */
 declare class JSONDebounceStorage extends DebounceStorage {
+    _cache: any;
     /**
      * @param {object} initialValue
      * @param {(value: Object)=>Promise<void>|void} updator
