@@ -75,6 +75,9 @@ How does the magic work?
 
 1. **Deep Proxy**: We intercept all `get`, `set`, and `delete` operations on the object, tracking the exact path (e.g., `["user", "profile", "name"]`).
 2. **Schema-Driven Flat Structure**: In `FlatJSONStorage`, we maintain a schema to flatten nested JSON objects in the storage layer. When you modify `data.a.b.c`, only the `a.b.c` key is updated in the adapter. Say goodbye to the performance nightmare of saving the whole object!
+3. **Eager wrapping (Valtio-style)**: `WebStorageItemStorage` wraps every reachable nested object/array of its cache in a lightweight proxy up front, so deep mutations need no `get` trap. Two consequences:
+   - **Shared identity**: assigning the same object reference to two keys stores one shared proxy (`storage.data.a === storage.data.b`).
+   - **Write through the storage**: always mutate via `storage.data...`. Mutating a *nested* property of your original reference persists (it goes through the proxy), but *replacing a top-level property* on your original reference bypasses every trap — no flush is scheduled and the change is silently lost until an unrelated write happens.
 
 ---
 

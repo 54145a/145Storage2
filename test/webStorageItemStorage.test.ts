@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { WebStorageItemStorage } from "../storage.js";
 import { clearLocalStorage, waitForFlush } from "./helpers.js";
 
@@ -116,6 +116,45 @@ describe("WebStorageItemStorage", () => {
 		});
 	});
 
+	it("wraps assigned objects in place (shared-reference semantics)", async () => {
+		clearLocalStorage();
+		const storage = new WebStorageItemStorage("test_shared_ref", localStorage);
+		const raw = { inner: { n: 1 } };
+		storage.data.a = raw;
+		// 同一引用赋给两个键 → 共享同一个 proxy（复用契约）
+		storage.data.b = raw;
+		expect(storage.data.a).toBe(storage.data.b);
+		// 调用方引用被就地改造：深层写入经过 trap，正常持久化
+		raw.inner.n = 2;
+		await waitForFlush(() => {
+			expect(readRaw("test_shared_ref")).toMatchObject({
+				a: { inner: { n: 2 } },
+				b: { inner: { n: 2 } },
+			});
+		});
+	});
+
+	it("does not persist top-level replacement on the caller's raw reference", async () => {
+		clearLocalStorage();
+		const storage = new WebStorageItemStorage("test_raw_ref", localStorage);
+		const raw = { inner: { n: 1 } };
+		storage.data.a = raw;
+		await waitForFlush(() => {
+			expect(readRaw("test_raw_ref")).toMatchObject({ a: { inner: { n: 1 } } });
+		});
+		// 顶层替换直接写在原始 target 上，绕过 trap：
+		// 不调度 flush，内存缓存与后端分叉（文档化的语义）。
+		vi.useFakeTimers();
+		try {
+			raw.inner = { n: 2 };
+			expect(storage.data.a.inner.n).toBe(2); // 缓存视图已变
+			vi.advanceTimersByTime(200);
+			expect(readRaw("test_raw_ref")).toMatchObject({ a: { inner: { n: 1 } } }); // 后端未变
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("warns on user Symbol writes and never persists them", async () => {
 		clearLocalStorage();
 		const storage = new WebStorageItemStorage("test_symbol_set", localStorage);
@@ -170,10 +209,12 @@ describe("WebStorageItemStorage", () => {
 	});
 
 	it("abort() cancels a pending flush", async () => {
-		const { vi } = await import("vitest");
+		clearLocalStorage();
+		// 受控时钟：在写入调度之前安装 fake timers，
+		// 推进到防抖窗口之后，确定性地证明 flush 未发生
+		// （墙钟睡眠在事件循环停滞时可能让测试错误通过）。
 		vi.useFakeTimers();
 		try {
-			clearLocalStorage();
 			const storage = new WebStorageItemStorage("test_abort", localStorage);
 			storage.data.count = 1;
 			storage.abort();
@@ -228,9 +269,17 @@ describe("WebStorageItemStorage", () => {
 		await waitForFlush(() => {
 			expect(writes).toEqual(['{"n":1}']);
 		});
-		storage.data.n = 1; // 相同值：Object.is 短路，不调度更新
-		await new Promise((r) => setTimeout(r, 200));
-		expect(writes).toEqual(['{"n":1}']);
+		// 受控时钟：在写入之前安装 fake timers，
+		// 推进到防抖窗口之后，确定性地证明没有新的 flush
+		// （墙钟睡眠在事件循环停滞时可能让测试错误通过）。
+		vi.useFakeTimers();
+		try {
+			storage.data.n = 1; // 相同值：Object.is 短路，不调度更新
+			vi.advanceTimersByTime(200);
+			expect(writes).toEqual(['{"n":1}']);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("falls back to an empty object when stored data is corrupt JSON", () => {

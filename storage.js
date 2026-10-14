@@ -221,9 +221,13 @@ function createFullDeepProxy(target, handler, currentKey = "") {
 			return Reflect.getOwnPropertyDescriptor(target, prop);
 		}
 	});
+	fullDeepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
+	// Register ownership so foreign-proxy detachment (isForeignDeepProxy)
+	// recognizes full proxies too. Without this, a full proxy assigned into
+	// a light-proxy storage (e.g. `item.data.copy = flat.data.cfg`) is
+	// wrapped as-is, and writes through it dispatch to the *flat* backend.
 	knownDeepProxies.add(proxy);
 	deepProxyOwners.set(proxy, handler);
-	fullDeepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
 	return proxy;
 }
 
@@ -407,6 +411,13 @@ class JSONDebounceStorage extends DebounceStorage {
 	 * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
 	 * It fires only when the value actually changes — identical-value
 	 * assignments are short-circuited before reaching `onSet`.
+	 * Assigned objects are wrapped in place (Valtio-style): the
+	 * caller's object becomes the proxy target and its nested
+	 * objects/arrays are replaced with light proxies, so the same
+	 * reference assigned to two keys shares one proxy. Mutate
+	 * through `data` — replacing a top-level property on the
+	 * original reference bypasses the traps and is not persisted
+	 * until an unrelated write schedules a flush.
 	 */
 	constructor(initialValue, updator, { updateDelayMs, structuredCloneExempt, onSet = () => { } } = {}) {
 		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
@@ -465,6 +476,11 @@ class JSONDebounceStorage extends DebounceStorage {
 			JSONDebounceStorage._eagerWrap(value, handler);
 			return proxy;
 		}
+		// A proxied initial value (e.g. another key's debouncer
+		// data, assigned like `flat.data.b = flat.data.a`) would
+		// route this instance's writes to the *other* debouncer's
+		// updater — detach it so the cache is an isolated plain
+		// value this instance owns.
 		if (knownDeepProxies.has(this._cache)) this._cache = detachForeignProxy(this._cache);
 		this._data = createLightDeepProxy(this._cache, handler);
 		JSONDebounceStorage._eagerWrap(this._cache, handler);
@@ -871,6 +887,11 @@ class FlatJSONStorage extends StorageInterface {
 	_getArrayDebouncer(key, initialArr) {
 		let debouncer = this.arrayDebouncers.get(key);
 		if (!debouncer) {
+			// A proxied initial array (e.g. another key's debouncer
+			// data, assigned like `flat.data.b = flat.data.a`) is
+			// detached by the JSONDebounceStorage constructor below,
+			// so this key gets an isolated plain array instead of
+			// sharing the foreign cache.
 			let arrTarget = initialArr || this.cache.get(key);
 			if (!Array.isArray(arrTarget)) {
 				throw new TypeError(

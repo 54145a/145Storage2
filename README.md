@@ -121,6 +121,9 @@ How does the magic work?
 
 1. **Deep Proxy**: We intercept all `get`, `set`, and `delete` operations on the object, tracking the exact path (e.g., `["user", "profile", "name"]`).
 2. **Schema-Driven Flat Structure**: In `FlatJSONStorage`, we maintain a schema to flatten nested JSON objects in the storage layer. When you modify `data.a.b.c`, only the `a.b.c` key is updated in the adapter. Say goodbye to the performance nightmare of saving the whole object!
+3. **Eager wrapping (Valtio-style)**: `WebStorageItemStorage` wraps every reachable nested object/array of its cache in a lightweight proxy up front, so deep mutations need no `get` trap. Two consequences:
+   - **Shared identity**: assigning the same object reference to two keys stores one shared proxy (`storage.data.a === storage.data.b`).
+   - **Write through the storage**: always mutate via `storage.data...`. Mutating a *nested* property of your original reference persists (it goes through the proxy), but *replacing a top-level property* on your original reference bypasses every trap — no flush is scheduled and the change is silently lost until an unrelated write happens.
 
 ---
 
@@ -268,6 +271,13 @@ declare class JSONDebounceStorage extends DebounceStorage {
      * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
      * It fires only when the value actually changes — identical-value
      * assignments are short-circuited before reaching `onSet`.
+     * Assigned objects are wrapped in place (Valtio-style): the
+     * caller's object becomes the proxy target and its nested
+     * objects/arrays are replaced with light proxies, so the same
+     * reference assigned to two keys shares one proxy. Mutate
+     * through `data` — replacing a top-level property on the
+     * original reference bypasses the traps and is not persisted
+     * until an unrelated write schedules a flush.
      */
     constructor(initialValue: object, updator: (value: Object) => Promise<void> | void, { updateDelayMs, structuredCloneExempt, onSet }?: {
         updateDelayMs?: number;
