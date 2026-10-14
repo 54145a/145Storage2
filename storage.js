@@ -221,6 +221,8 @@ function createFullDeepProxy(target, handler, currentKey = "") {
 			return Reflect.getOwnPropertyDescriptor(target, prop);
 		}
 	});
+	knownDeepProxies.add(proxy);
+	deepProxyOwners.set(proxy, handler);
 	fullDeepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
 	return proxy;
 }
