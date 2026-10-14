@@ -170,13 +170,18 @@ describe("WebStorageItemStorage", () => {
 	});
 
 	it("abort() cancels a pending flush", async () => {
-		clearLocalStorage();
-		const storage = new WebStorageItemStorage("test_abort", localStorage);
-		storage.data.count = 1;
-		storage.abort();
-		// 留出足够时间让“本应发生”的 flush 暴露出来。
-		await new Promise((r) => setTimeout(r, 200));
-		expect(localStorage.getItem("test_abort")).toBeNull();
+		const { vi } = await import("vitest");
+		vi.useFakeTimers();
+		try {
+			clearLocalStorage();
+			const storage = new WebStorageItemStorage("test_abort", localStorage);
+			storage.data.count = 1;
+			storage.abort();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(localStorage.getItem("test_abort")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("sees writes immediately through the cache (read-your-write)", () => {
