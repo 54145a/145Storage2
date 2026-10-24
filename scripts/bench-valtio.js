@@ -55,10 +55,11 @@ bench("[Flat]      shallow read", () => { const x = fd.arr; });
 bench("[Debounce]  shallow read", () => { const x = wd.arr; });
 bench("[Valtio]    shallow read", () => { const x = vState.arr; });
 
-console.log("\n=== Shallow Write: d.count = 1 ===");
-bench("[Flat]      shallow write", () => { fd.count = 1; }, 50000);
-bench("[Debounce]  shallow write", () => { wd.count = 1; }, 50000);
-bench("[Valtio]    shallow write", () => { vState.count = 1; }, 50000);
+console.log("\n=== Shallow Write: d.count = i++ ===");
+let countWrite = 0;
+bench("[Flat]      shallow write", () => { fd.count = countWrite++; }, 50000);
+bench("[Debounce]  shallow write", () => { wd.count = countWrite++; }, 50000);
+bench("[Valtio]    shallow write", () => { vState.count = countWrite++; }, 50000)
 
 console.log("\n=== Nested Write: d.a.b = 1 ===");
 bench("[Flat]      nested write", () => { fd.a.b = 1; }, 100000);
