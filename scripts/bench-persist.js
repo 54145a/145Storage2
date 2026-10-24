@@ -88,11 +88,12 @@ for (const round of ROUNDS) {
   bench("[Valtio+persist] shallow read", () => { const x = vpStore.arr; }, round.reads);
   bench("[Valtio raw]     shallow read", () => { const x = vRaw.arr; }, round.reads);
 
-  console.log("\n--- Shallow Write: d.count = 1 ---");
-  bench("[Flat]           shallow write", () => { fd.count = 1; }, round.writes);
-  bench("[Debounce]       shallow write", () => { wd.count = 1; }, round.writes);
-  bench("[Valtio+persist] shallow write", () => { vpStore.count = 1; }, round.writes);
-  bench("[Valtio raw]     shallow write", () => { vRaw.count = 1; }, round.writes);
+console.log("\n--- Shallow Write: d.count = i++ ---");
+let shallowWrite = 0;
+bench("[Flat]           shallow write", () => { fd.count = shallowWrite++; }, round.writes);
+bench("[Debounce]       shallow write", () => { wd.count = shallowWrite++; }, round.writes);
+bench("[Valtio+persist] shallow write", () => { vpStore.count = shallowWrite++; }, round.writes);
+bench("[Valtio raw]     shallow write", () => { vRaw.count = shallowWrite++; }, round.writes)
 
   console.log("\n--- Nested Write: d.a.b = 1 ---");
   bench("[Flat]           nested write", () => { fd.a.b = 1; }, round.writes);
