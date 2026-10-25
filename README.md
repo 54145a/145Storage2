@@ -121,9 +121,9 @@ How does the magic work?
 
 1. **Deep Proxy**: We intercept all `get`, `set`, and `delete` operations on the object, tracking the exact path (e.g., `["user", "profile", "name"]`).
 2. **Schema-Driven Flat Structure**: In `FlatJSONStorage`, we maintain a schema to flatten nested JSON objects in the storage layer. When you modify `data.a.b.c`, only the `a.b.c` key is updated in the adapter. Say goodbye to the performance nightmare of saving the whole object!
-3. **Eager wrapping (Valtio-style)**: `WebStorageItemStorage` wraps every reachable nested object/array of its cache in a lightweight proxy up front, so deep mutations need no `get` trap. Two consequences:
-   - **Shared identity**: assigning the same object reference to two keys stores one shared proxy (`storage.data.a === storage.data.b`).
-   - **Write through the storage**: always mutate via `storage.data...`. Mutating a *nested* property of your original reference persists (it goes through the proxy), but *replacing a top-level property* on your original reference bypasses every trap — no flush is scheduled and the change is silently lost until an unrelated write happens.
+3. **Everything stored is a deep copy**: assigning an object snapshots it into the store, which then wraps its own private copy in lightweight proxies up front, so deep mutations need no `get` trap. Two consequences:
+   - **Your objects are never adopted**: the store never holds, mutates or aliases the object you passed. Mutating it afterwards (at any depth) has no effect on the store and is not persisted — write through `storage.data...` instead.
+   - **Shared identity inside the store**: assigning the same object reference to two keys keeps one stored value (`storage.data.a === storage.data.b`), and re-assigning that reference refreshes the stored copy.
 
 ---
 
@@ -152,11 +152,11 @@ Issues, PRs, and suggestions are super welcome! Let's make state persistence ele
 
 Repo layout:
 
-- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts` + `example.js`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
+- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `example.js` + `vitest.config.ts` + `test/**/*.test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
 - `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and gitignored — don't commit or hand-edit it. It is rebuilt at publish time and shipped inside the package.
 - `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
 - `example.js` is the runnable quick-start injected into the "Try it now" section — it's executed by `pnpm example` and type-checked by `tsc`, so the README examples can't drift from real behavior.
-- `test.ts` is the test file (plain `node:assert` + console runner, no test framework).
+- Tests live in `test/` and run under Vitest (`test/**/*.test.ts`); shared helpers are in `test/helpers.ts`.
 - `typedoc.json` builds the showcase site with **TypeDoc** (API docs from the `storage.js` JSDoc, this README as front page) — `buildDocs.ts` runs it via `pnpm site`, so `pnpm build` outputs `docs/dist` in one flow.
 
 ## 📚 Reference
@@ -198,8 +198,9 @@ declare class DeepProxyWrapExempt {
  * (`set`, `deleteProperty`). No path tracking, no get trap, no pass-through
  * `has` / `ownKeys` / `getOwnPropertyDescriptor` traps — those fall back to
  * V8's native default path, keeping key enumeration and spread fast. Every
- * reachable nested value must already be wrapped by the caller (`_eagerWrap`)
- * so reads are pure native property access through the proxy boundary.
+ * reachable nested value must already be wrapped by `wrapStoredValue` (the
+ * store owns its object graph), so reads are pure native property access
+ * through the proxy boundary.
  * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
  * {@link createFullDeepProxy}. Symbol handling is identical there: built-in
  * Symbols pass through to `Reflect`, user-defined Symbols get a
@@ -242,13 +243,8 @@ declare class DebounceStorage extends StorageInterface {
      * @param {Exclude<any, undefined>} initialValue
      * @param {(value: any)=>Promise<void>|void} updator
      * @param {number} updateDelayMs
-     * @param {boolean} structuredCloneExempt When `true`, the user guarantees they
-     * will not modify `initialValue` after construction, so the cache holds the
-     * original object directly (no clone). Without this flag (the default), the
-     * user may freely modify their object, so we `structuredClone` it to keep
-     * an isolated private cache. Eager proxy wrapping is always applied regardless.
      */
-    constructor(initialValue: Exclude<any, undefined>, updator: (value: any) => Promise<void> | void, updateDelayMs?: number, structuredCloneExempt?: boolean);
+    constructor(initialValue: Exclude<any, undefined>, updator: (value: any) => Promise<void> | void, updateDelayMs?: number);
     /** @returns {Promise<void>|void} */
     init(): Promise<void> | void;
     /** @protected */
@@ -263,33 +259,31 @@ declare class DebounceStorage extends StorageInterface {
  * @extends {DebounceStorage}
  */
 declare class JSONDebounceStorage extends DebounceStorage {
-    _cache: any;
     /**
      * @param {object} initialValue
      * @param {(value: Object)=>Promise<void>|void} updator
-     * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
+     * @param {{updateDelayMs?: number, onSet?: (value: Object, key: string)=>void}} options
      * `onSet` is called with the assigned value and the leaf property name
      * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
      * It fires only when the value actually changes — identical-value
      * assignments are short-circuited before reaching `onSet`.
-     * Assigned objects are wrapped in place (Valtio-style): the
-     * caller's object becomes the proxy target and its nested
-     * objects/arrays are replaced with light proxies, so the same
-     * reference assigned to two keys shares one proxy. Mutate
-     * through `data` — replacing a top-level property on the
-     * original reference bypasses the traps and is not persisted
-     * until an unrelated write schedules a flush.
+     *
+     * Everything stored is a **deep copy**: assigning an object snapshots it, so
+     * the caller's object graph is never adopted, mutated, or aliased. Mutating
+     * the object after assigning it does not affect the store (and is not
+     * persisted); write through `data` instead. The same reference assigned to
+     * two keys keeps one stored value (`data.a === data.b`), because the copy is
+     * memoized per source reference.
      */
-    constructor(initialValue: object, updator: (value: Object) => Promise<void> | void, { updateDelayMs, structuredCloneExempt, onSet }?: {
+    constructor(initialValue: object, updator: (value: Object) => Promise<void> | void, { updateDelayMs, onSet }?: {
         updateDelayMs?: number;
-        structuredCloneExempt?: boolean;
         onSet?: (value: Object, key: string) => void;
     });
     /**
      * Recursively replace every nested JSON object/array in `obj` with its
      * light proxy, so that all values reachable from the cache are already
-     * wrapped and reads need no `get` trap. Light proxies owned by another
-     * instance are detached (copied) before being re-wrapped here.
+     * wrapped and reads need no `get` trap. Values that are already this
+     * handler's proxies are kept as-is (identity reuse).
      * @param {Record<string, any>} obj
      * @param {DeepProxyHandler} handler
      */

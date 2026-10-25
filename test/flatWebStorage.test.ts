@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { FlatWebStorage } from "../storage.js";
+import { FlatJSONStorage, FlatWebStorage } from "../storage.js";
 import { clearLocalStorage, waitForFlush } from "./helpers.js";
 
 function makeFlat(namespace: string) {
@@ -339,6 +339,72 @@ describe("FlatWebStorage", () => {
 		flat.data.items = ["x"];
 		flat.data.items ??= ["y"]; // 已存在 —— 不覆盖
 		expect(await flat.get`items`).toEqual(["x"]);
+	});
+
+
+	// #region 新增：代理 target 归属隔离（不依赖调用方传入对象）
+
+	it("isolates a schema object shared by two adapters (no user-supplied object)", async () => {
+		// 两个适配器对「尚无 schema」返回同一个模块级默认对象。该对象是库自身
+		// 交给 JSONDebounceStorage 的（structuredCloneExempt），并非用户传入；
+		// 若按 raw target 复用，两个实例的 schema 会互相污染。
+		const defaultSchema = {};
+		const makeAdapter = () => {
+			const store = new Map<string, unknown>();
+			return {
+				store,
+				adapter: {
+					get: (key: string) => (key === "__145Storage__flatSchema__" ? defaultSchema : store.get(key)),
+					set: (key: string, value: unknown) => void store.set(key, value),
+					delete: (key: string) => void store.delete(key),
+				},
+			};
+		};
+		const one = makeAdapter();
+		const two = makeAdapter();
+		const flatOne = new FlatJSONStorage(one.adapter);
+		const flatTwo = new FlatJSONStorage(two.adapter);
+		await flatOne.init();
+		await flatTwo.init();
+
+		flatOne.data.a = 1;
+		await waitForFlush(() => {
+			expect(one.store.get("__145Storage__flatSchema__")).toEqual({ a: 0 });
+		});
+		flatTwo.data.b = 2;
+		await waitForFlush(() => {
+			expect(two.store.get("__145Storage__flatSchema__")).toEqual({ b: 0 });
+		});
+		// 第二个实例的 schema 写入不得混入第一个实例的后端。
+		expect(one.store.get("__145Storage__flatSchema__")).toEqual({ a: 0 });
+	});
+
+	it("isolates an array object shared by two array keys (no user-supplied object)", async () => {
+		// 适配器对缺失的 key 返回同一个共享空数组；两个数组键各自建立
+		// debouncer 时都拿到这个 raw target。它同样不是用户传入的。
+		const EMPTY: unknown[] = [];
+		const store = new Map<string, unknown>([["__145Storage__flatSchema__", { a: "[]", b: "[]" }]]);
+		const flat = new FlatJSONStorage({
+			get: (key: string) => (key === "__145Storage__flatSchema__" ? store.get(key) : (store.get(key) ?? EMPTY)),
+			set: (key: string, value: unknown) => void store.set(key, value),
+			delete: (key: string) => void store.delete(key),
+		});
+		await flat.init();
+
+		flat.data.a;
+		flat.data.b;
+		flat.data.a.push(1);
+		await waitForFlush(() => {
+			expect(store.get("a")).toEqual([1]);
+		});
+		// b 的视图不得被 a 的写入污染。
+		expect(JSON.parse(JSON.stringify(flat.data.b))).toEqual([]);
+
+		flat.data.b.push(9);
+		await waitForFlush(() => {
+			expect(store.get("b")).toEqual([9]);
+		});
+		expect(store.get("a")).toEqual([1]);
 	});
 
 	// #endregion

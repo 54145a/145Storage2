@@ -22,15 +22,27 @@ class ProxyCacheEntry {
 const lightDeepProxyCache = new WeakMap();
 /** @type {WeakMap<object, ProxyCacheEntry>} */
 const fullDeepProxyCache = new WeakMap();
-/** @type {WeakSet<object>} */
-const knownDeepProxies = new WeakSet();
 /**
- * Light proxy → the `DeepProxyHandler` that owns it. Membership in
- * {@link knownDeepProxies} alone does not identify the owning storage, so
- * assigning one instance's value into another has to check this.
+ * Proxy → the `DeepProxyHandler` that owns it. Used to tell a value this store
+ * already owns (stored as-is, identity preserved) from one that belongs to a
+ * different store (which must be copied before it enters this one).
  * @type {WeakMap<object, DeepProxyHandler>}
  */
 const deepProxyOwners = new WeakMap();
+/**
+ * Proxy → the plain object behind it, so a re-assignment of the same source can
+ * refresh the stored copy in place instead of returning stale contents.
+ * @type {WeakMap<object, object>}
+ */
+const deepProxyTargets = new WeakMap();
+/**
+ * Handler → (source object → stored proxy). Memoizes the deep copy made for a
+ * given source reference, so assigning the same object to two keys keeps one
+ * stored value (`data.a === data.b`) rather than two divergent copies, while
+ * still never sharing the caller's object graph.
+ * @type {WeakMap<DeepProxyHandler, WeakMap<object, any>>}
+ */
+const storedCopyCache = new WeakMap();
 /** @type {WeakMap<object, Map<string, string[]>>} */
 const ownKeysCache = new WeakMap();
 /** @type {WeakMap<object, Map<string, {configurable: boolean, enumerable: boolean, writable: boolean, value: undefined} | null>>} */
@@ -95,8 +107,9 @@ const assertSymbol = (/** @type {string|symbol} */ prop) => {
  * (`set`, `deleteProperty`). No path tracking, no get trap, no pass-through
  * `has` / `ownKeys` / `getOwnPropertyDescriptor` traps — those fall back to
  * V8's native default path, keeping key enumeration and spread fast. Every
- * reachable nested value must already be wrapped by the caller (`_eagerWrap`)
- * so reads are pure native property access through the proxy boundary.
+ * reachable nested value must already be wrapped by `wrapStoredValue` (the
+ * store owns its object graph), so reads are pure native property access
+ * through the proxy boundary.
  * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
  * {@link createFullDeepProxy}. Symbol handling is identical there: built-in
  * Symbols pass through to `Reflect`, user-defined Symbols get a
@@ -123,31 +136,98 @@ function createLightDeepProxy(target, handler) {
 			return Reflect.deleteProperty(obj, prop);
 		}
 	});
-	knownDeepProxies.add(proxy);
 	deepProxyOwners.set(proxy, handler);
+	deepProxyTargets.set(proxy, target);
 	lightDeepProxyCache.set(target, new ProxyCacheEntry(proxy, "", handler));
 	return proxy;
 }
 /**
- * True when `value` is a light proxy owned by a *different* handler, i.e. it
- * belongs to another `JSONDebounceStorage` instance.
+ * Deep-copies a JSON value. Everything the storages keep is a deep copy of what
+ * they were given, so a caller can keep mutating its own objects without
+ * affecting — or being affected by — the store. `JSON` is the persisted form
+ * of every value that passed `assertIsJSONStorageStorableValue`, so the
+ * round-trip is lossless.
  * @param {*} value
- * @param {DeepProxyHandler} handler
+ * @returns {*}
  */
-function isForeignDeepProxy(value, handler) {
-	return knownDeepProxies.has(/** @type {object} */ (value)) && deepProxyOwners.get(/** @type {object} */ (value)) !== handler;
+function deepCopyValue(value) {
+	if (value === null || typeof value !== "object") return value;
+	return JSON.parse(/** @type {string} */ (JSON.stringify(value)));
 }
 /**
- * Detaches a value that is, or contains, a foreign light proxy: writes through
- * such a proxy dispatch to the *other* storage's updater, so storing it as-is
- * would send this instance's writes to the wrong backend. JSON is the persisted
- * form of every value that passed `assertIsJSONStorageStorableValue`, so the
- * round-trip is lossless and yields plain data this instance can wrap itself —
- * the same isolation `DebounceStorage` applies to its initial value.
+ * Deep-copies `value` into an object graph owned by `handler`: a fresh object
+ * whose nested slots are this store's light proxies. The caller's graph is
+ * never adopted or mutated — everything stored is a deep copy.
+ *
+ * Copies are memoized per handler by *source* reference, so assigning the same
+ * object to two keys keeps one stored value (`data.a === data.b`) instead of
+ * two divergent copies. Re-assigning a source refreshes its copy in place, so
+ * identity survives while new contents are picked up.
+ *
+ * A proxy is not a plain source: one this handler owns is returned as-is (it is
+ * already stored data), and a foreign one is snapshotted afresh — importing
+ * another store's value twice must not alias two keys of this store.
  * @param {*} value
+ * @param {DeepProxyHandler} handler
+ * @returns {*}
  */
-function detachForeignProxy(value) {
-	return JSON.parse(/** @type {string} */ (JSON.stringify(value)));
+function wrapStoredValue(value, handler) {
+	if (value === null || typeof value !== "object" || !(Array.isArray(value) || isPlainObject(value))) return value;
+	const owner = deepProxyOwners.get(value);
+	if (owner !== undefined) {
+		return owner === handler ? value : copyStoredValue(value, handler);
+	}
+	let perHandler = storedCopyCache.get(handler);
+	if (!perHandler) { perHandler = new WeakMap(); storedCopyCache.set(handler, perHandler); }
+	const cached = perHandler.get(value);
+	if (cached !== undefined) {
+		refreshStoredCopy(cached, value, handler);
+		return cached;
+	}
+	const proxy = copyStoredValue(value, handler);
+	perHandler.set(value, proxy);
+	return proxy;
+}
+/**
+ * Builds the stored copy for `value` and wraps it (and its children) in light
+ * proxies owned by `handler`. The source is only read, never written.
+ * @param {*} value
+ * @param {DeepProxyHandler} handler
+ * @returns {*}
+ */
+function copyStoredValue(value, handler) {
+	/** @type {any} */
+	const copy = Array.isArray(value) ? [] : {};
+	const proxy = createLightDeepProxy(copy, handler);
+	if (Array.isArray(value)) {
+		for (let i = 0; i < value.length; i++) copy[i] = wrapStoredValue(value[i], handler);
+	} else {
+		const source = /** @type {Record<string, any>} */ (value);
+		for (const key of Object.keys(source)) copy[key] = wrapStoredValue(source[key], handler);
+	}
+	return proxy;
+}
+/**
+ * Re-syncs an already stored copy with its source (same reference re-assigned
+ * after mutation), writing straight to the proxy target so no flush is
+ * scheduled by the refresh itself.
+ * @param {*} proxy
+ * @param {*} source
+ * @param {DeepProxyHandler} handler
+ */
+function refreshStoredCopy(proxy, source, handler) {
+	const target = /** @type {any} */ (deepProxyTargets.get(/** @type {object} */ (proxy)));
+	if (!target) return;
+	if (Array.isArray(source)) {
+		target.length = source.length;
+		for (let i = 0; i < source.length; i++) target[i] = wrapStoredValue(source[i], handler);
+		return;
+	}
+	const src = /** @type {Record<string, any>} */ (source);
+	for (const key of Object.keys(target)) {
+		if (!Object.hasOwn(src, key)) delete target[key];
+	}
+	for (const key of Object.keys(src)) target[key] = wrapStoredValue(src[key], handler);
 }
 /**
  * The full-featured deep proxy: reports every property access as a
@@ -222,12 +302,11 @@ function createFullDeepProxy(target, handler, currentKey = "") {
 		}
 	});
 	fullDeepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
-	// Register ownership so foreign-proxy detachment (isForeignDeepProxy)
-	// recognizes full proxies too. Without this, a full proxy assigned into
-	// a light-proxy storage (e.g. `item.data.copy = flat.data.cfg`) is
-	// wrapped as-is, and writes through it dispatch to the *flat* backend.
-	knownDeepProxies.add(proxy);
+	// Register ownership so a full proxy assigned into a whole-document store
+	// (e.g. `item.data.copy = flat.data.cfg`) is copied, not adopted — otherwise
+	// writes through it would dispatch to the *flat* backend.
 	deepProxyOwners.set(proxy, handler);
+	deepProxyTargets.set(proxy, target);
 	return proxy;
 }
 
@@ -288,15 +367,13 @@ class DebounceStorage extends StorageInterface {
 	 * @param {Exclude<any, undefined>} initialValue 
 	 * @param {(value: any)=>Promise<void>|void} updator 
 	 * @param {number} updateDelayMs 
-	 * @param {boolean} structuredCloneExempt When `true`, the user guarantees they
-	 * will not modify `initialValue` after construction, so the cache holds the
-	 * original object directly (no clone). Without this flag (the default), the
-	 * user may freely modify their object, so we `structuredClone` it to keep
-	 * an isolated private cache. Eager proxy wrapping is always applied regardless.
 	 */
-	constructor(initialValue, updator, updateDelayMs = 100, structuredCloneExempt = false) {
+	constructor(initialValue, updator, updateDelayMs = 100) {
 		super();
-		this._cache = structuredCloneExempt ? initialValue : structuredClone(initialValue);
+		// Everything the storage holds is a deep copy of what it was given: the
+		// caller's object graph is never adopted, so later mutations of it cannot
+		// leak into the store (and vice versa).
+		this._cache = deepCopyValue(initialValue);
 		this.updator = updator;
 		this.updateDelayMs = updateDelayMs;
 	}
@@ -406,28 +483,35 @@ class JSONDebounceStorage extends DebounceStorage {
 	/** 
 	 * @param {object} initialValue
 	 * @param {(value: Object)=>Promise<void>|void} updator
-	 * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
+	 * @param {{updateDelayMs?: number, onSet?: (value: Object, key: string)=>void}} options
 	 * `onSet` is called with the assigned value and the leaf property name
 	 * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
 	 * It fires only when the value actually changes — identical-value
 	 * assignments are short-circuited before reaching `onSet`.
-	 * Assigned objects are wrapped in place (Valtio-style): the
-	 * caller's object becomes the proxy target and its nested
-	 * objects/arrays are replaced with light proxies, so the same
-	 * reference assigned to two keys shares one proxy. Mutate
-	 * through `data` — replacing a top-level property on the
-	 * original reference bypasses the traps and is not persisted
-	 * until an unrelated write schedules a flush.
+	 *
+	 * Everything stored is a **deep copy**: assigning an object snapshots it, so
+	 * the caller's object graph is never adopted, mutated, or aliased. Mutating
+	 * the object after assigning it does not affect the store (and is not
+	 * persisted); write through `data` instead. The same reference assigned to
+	 * two keys keeps one stored value (`data.a === data.b`), because the copy is
+	 * memoized per source reference.
 	 */
-	constructor(initialValue, updator, { updateDelayMs, structuredCloneExempt, onSet = () => { } } = {}) {
-		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
+	constructor(initialValue, updator, { updateDelayMs, onSet = () => { } } = {}) {
+		super(initialValue, updator, updateDelayMs);
 		// --- Eager wrapping (always active) ---
 		// Every reachable nested JSON object/array in the cache is replaced
-		// with a light proxy (Valtio-style). The data proxy therefore needs
-		// no `get` trap: reads are pure native property access through the
-		// proxy boundary. This works even for structuredCloneExempt mode
-		// because the proxy is transparent — reads from the user's own
-		// reference behave identically to plain-object reads.
+		// with a light proxy. The data proxy therefore needs no `get` trap:
+		// reads are pure native property access through the proxy boundary.
+		// The cache itself is already a private deep copy (DebounceStorage),
+		// so wrapping it never touches the caller's objects.
+		/**
+		 * The cache is already a private deep copy, so every value it holds is
+		 * this store's own data. `wrapStoredValue` copies what is assigned and
+		 * wraps the copies, keeping reads trap-free without ever adopting the
+		 * caller's graph.
+		 * @param {*} value
+		 */
+		const wrapForCache = (value) => wrapStoredValue(value, handler);
 		const handler = {
 			/**
 			 * @param {object} target
@@ -444,7 +528,7 @@ class JSONDebounceStorage extends DebounceStorage {
 				assertIsJSONStorageStorableValue(value);
 				onSet(value, prop);
 				this.requestUpdate();
-				return Reflect.set(target, prop, toStoredValue(value), Array.isArray(target) ? target : receiver);
+				return Reflect.set(target, prop, wrapForCache(value), Array.isArray(target) ? target : receiver);
 			},
 			/**
 			 * @param {object} target
@@ -455,33 +539,6 @@ class JSONDebounceStorage extends DebounceStorage {
 				return Reflect.deleteProperty(target, prop);
 			}
 		};
-		/**
-		 * JSON object/array values are stored wrapped in light proxies, so
-		 * reads need no `get` trap. Values already wrapped by *this* instance
-		 * pass through. The assigned value's OWN nested objects/arrays are
-		 * recursively wrapped too — otherwise reads would return raw inner
-		 * values whose mutations bypass every trap (and persistence).
-		 * @param {*} value
-		 * @returns {*}
-		 */
-		function toStoredValue(value) {
-			if (value === null || typeof value !== "object" || !(Array.isArray(value) || isPlainObject(value))) {
-				return value;
-			}
-			if (knownDeepProxies.has(value)) {
-				if (!isForeignDeepProxy(value, handler)) return value;
-				value = detachForeignProxy(value);
-			}
-			const proxy = createLightDeepProxy(value, handler);
-			JSONDebounceStorage._eagerWrap(value, handler);
-			return proxy;
-		}
-		// A proxied initial value (e.g. another key's debouncer
-		// data, assigned like `flat.data.b = flat.data.a`) would
-		// route this instance's writes to the *other* debouncer's
-		// updater — detach it so the cache is an isolated plain
-		// value this instance owns.
-		if (knownDeepProxies.has(this._cache)) this._cache = detachForeignProxy(this._cache);
 		this._data = createLightDeepProxy(this._cache, handler);
 		JSONDebounceStorage._eagerWrap(this._cache, handler);
 		this.init();
@@ -489,21 +546,18 @@ class JSONDebounceStorage extends DebounceStorage {
 	/**
 	 * Recursively replace every nested JSON object/array in `obj` with its
 	 * light proxy, so that all values reachable from the cache are already
-	 * wrapped and reads need no `get` trap. Light proxies owned by another
-	 * instance are detached (copied) before being re-wrapped here.
+	 * wrapped and reads need no `get` trap. Values that are already this
+	 * handler's proxies are kept as-is (identity reuse).
 	 * @param {Record<string, any>} obj
 	 * @param {DeepProxyHandler} handler
 	 */
 	static _eagerWrap(obj, handler) {
 		for (const key of Object.keys(obj)) {
-			let val = obj[key];
+			const val = obj[key];
 			if (val === null || typeof val !== "object" || !(Array.isArray(val) || isPlainObject(val))) continue;
-			if (knownDeepProxies.has(val)) {
-				if (deepProxyOwners.get(val) === handler) continue;
-				// Proxy from another instance: detach it, or writes through this
-				// cache would be routed to that storage's updater.
-				val = detachForeignProxy(val);
-			}
+			if (deepProxyOwners.get(val) === handler) continue;
+			// In place: `obj` belongs to this store (its cache is a private deep
+			// copy), so wrapping it does not touch any caller object.
 			obj[key] = createLightDeepProxy(val, handler);
 			JSONDebounceStorage._eagerWrap(val, handler);
 		}
@@ -760,8 +814,7 @@ class FlatJSONStorage extends StorageInterface {
 
 		this.schemaStorage = new JSONDebounceStorage(
 			initialSchema,
-			async (val) => { await this.adapter.set(FLAT_SCHEMA_KEY, val); },
-			{ structuredCloneExempt: true }
+			async (val) => { await this.adapter.set(FLAT_SCHEMA_KEY, val); }
 		);
 		this.schema = this.schemaStorage.data;
 		clearEnumerationCaches(this);
@@ -887,12 +940,11 @@ class FlatJSONStorage extends StorageInterface {
 	_getArrayDebouncer(key, initialArr) {
 		let debouncer = this.arrayDebouncers.get(key);
 		if (!debouncer) {
-			// A proxied initial array (e.g. another key's debouncer
-			// data, assigned like `flat.data.b = flat.data.a`) is
-			// detached by the JSONDebounceStorage constructor below,
-			// so this key gets an isolated plain array instead of
-			// sharing the foreign cache.
-			let arrTarget = initialArr || this.cache.get(key);
+			// The debouncer deep-copies its initial value, so a proxied
+			// array (e.g. another key's data, assigned like
+			// `flat.data.b = flat.data.a`) gives this key an isolated
+			// array instead of sharing the other key's cache.
+			const arrTarget = initialArr || this.cache.get(key);
 			if (!Array.isArray(arrTarget)) {
 				throw new TypeError(
 					`[FlatJSONStorage] Expected an array but got ${typeof arrTarget} at "${key}". Schema and cache are out of sync.`
@@ -905,7 +957,6 @@ class FlatJSONStorage extends StorageInterface {
 					await this.adapter.set(key, newVal);
 				},
 				{
-					structuredCloneExempt: true,
 					onSet: (value, path) => {
 						assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
 					}

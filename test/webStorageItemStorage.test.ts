@@ -116,16 +116,48 @@ describe("WebStorageItemStorage", () => {
 		});
 	});
 
-	it("wraps assigned objects in place (shared-reference semantics)", async () => {
+
+	it("isolates a raw object adopted by another instance (same reference, no proxy)", async () => {
+		clearLocalStorage();
+		const a = new WebStorageItemStorage("test_raw_a", localStorage);
+		const b = new WebStorageItemStorage("test_raw_b", localStorage);
+		const raw = { nested: { n: 1 } };
+		a.data.x = raw; // A adopts `raw` as its proxy target
+		await waitForFlush(() => {
+			expect(readRaw("test_raw_a")).toMatchObject({ x: { nested: { n: 1 } } });
+		});
+		// Same raw reference into B. `raw` is not a proxy, so a proxy-only
+		// ownership check misses it: B would re-adopt the target and hijack
+		// A's nested reads, routing A's writes into B's backing store.
+		b.data.x = raw;
+		await waitForFlush(() => {
+			expect(readRaw("test_raw_b")).toMatchObject({ x: { nested: { n: 1 } } });
+		});
+		a.data.x.nested.n = 2;
+		await waitForFlush(() => {
+			expect(readRaw("test_raw_a")).toMatchObject({ x: { nested: { n: 2 } } });
+		});
+		// A's write must not reach B.
+		expect(readRaw("test_raw_b")).toMatchObject({ x: { nested: { n: 1 } } });
+		b.data.x.nested.n = 9;
+		await waitForFlush(() => {
+			expect(readRaw("test_raw_b")).toMatchObject({ x: { nested: { n: 9 } } });
+		});
+		expect(readRaw("test_raw_a")).toMatchObject({ x: { nested: { n: 2 } } });
+	});
+
+	it("stores a deep copy: the same reference keeps one stored value", async () => {
 		clearLocalStorage();
 		const storage = new WebStorageItemStorage("test_shared_ref", localStorage);
 		const raw = { inner: { n: 1 } };
 		storage.data.a = raw;
-		// 同一引用赋给两个键 → 共享同一个 proxy（复用契约）
+		// 同一引用赋给两个键 → 只存一份深拷贝，两个键指向同一份存储值
 		storage.data.b = raw;
 		expect(storage.data.a).toBe(storage.data.b);
-		// 调用方引用被就地改造：深层写入经过 trap，正常持久化
-		raw.inner.n = 2;
+		expect(storage.data.a).not.toBe(raw);
+		expect(storage.data.a.inner).not.toBe(raw.inner);
+		// 写入存储视图正常持久化
+		storage.data.a.inner.n = 2;
 		await waitForFlush(() => {
 			expect(readRaw("test_shared_ref")).toMatchObject({
 				a: { inner: { n: 2 } },
@@ -134,25 +166,33 @@ describe("WebStorageItemStorage", () => {
 		});
 	});
 
-	it("does not persist top-level replacement on the caller's raw reference", async () => {
+	it("never adopts the caller's object graph (mutating it does not persist)", async () => {
 		clearLocalStorage();
 		const storage = new WebStorageItemStorage("test_raw_ref", localStorage);
 		const raw = { inner: { n: 1 } };
+		const nested = raw.inner;
 		storage.data.a = raw;
 		await waitForFlush(() => {
 			expect(readRaw("test_raw_ref")).toMatchObject({ a: { inner: { n: 1 } } });
 		});
-		// 顶层替换直接写在原始 target 上，绕过 trap：
-		// 不调度 flush，内存缓存与后端分叉（文档化的语义）。
+		// 深拷贝语义：调用方对象图未被改写，也没有被存储采用。
+		expect(raw.inner).toBe(nested);
 		vi.useFakeTimers();
 		try {
 			raw.inner = { n: 2 };
-			expect(storage.data.a.inner.n).toBe(2); // 缓存视图已变
+			raw.inner.n = 3;
+			// 缓存与后端都看不到调用方的改动。
+			expect(storage.data.a.inner.n).toBe(1);
 			vi.advanceTimersByTime(200);
-			expect(readRaw("test_raw_ref")).toMatchObject({ a: { inner: { n: 1 } } }); // 后端未变
+			expect(readRaw("test_raw_ref")).toMatchObject({ a: { inner: { n: 1 } } });
 		} finally {
 			vi.useRealTimers();
 		}
+		// 重新赋值同一引用会把新内容同步进来（拷贝按源引用记忆，但会刷新）。
+		storage.data.c = raw;
+		await waitForFlush(() => {
+			expect(readRaw("test_raw_ref")).toMatchObject({ c: { inner: { n: 3 } } });
+		});
 	});
 
 	it("warns on user Symbol writes and never persists them", async () => {
