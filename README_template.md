@@ -1,7 +1,7 @@
 # 📦 145 Storage 2: My KV is a **plain Object**
 
 [![npm version](https://img.shields.io/npm/v/@54145a/storage2.svg)](https://www.npmjs.com/package/@54145a/storage2)[![license](https://img.shields.io/npm/l/@54145a/storage2.svg)](./LICENSE)[![GitHub stars](https://img.shields.io/github/stars/54145a/145Storage2.svg)](https://github.com/54145a/145Storage2)
-> A lightweight, smart JavaScript storage library that makes state persistence as easy as modifying a plain object.
+> A JavaScript storage library that uses property accessor syntax, making state persistence as simple as modifying a plain object.
 
 ## Why 145 Storage 2
 
@@ -23,14 +23,20 @@ settings.count += 1;
 
 - 🪄 **Deep Reactive Proxy**: Modify any nested property, and it saves automatically.
 - 🏗️ **Innovative Flat Storage**: Breaks down nested JSON objects into flat Key-Value pairs. No need to serialize the entire object just to update a deep property!
-- ⚡ **Smart Debouncing**: Automatically merges frequent writes (like array operations) for extreme performance.
+- ⚡ **Smart Debouncing**: Array keys and whole-blob writes are merged into a single flush, while a single value persists immediately — no waiting.
 - 🔒 **Type Safety**: Blocks un-storable values (like `undefined` or `function`) to keep your storage safe.
 - 🌐 **Framework Agnostic**: Works in any vanilla JS or framework environment.
 
 ## 🚀 Try it now
 
-```typescript
-{{TEST}}
+```sh
+npm i @54145a/storage2
+```
+
+Three storage flavors, one ergonomic idea: edit a plain object and it persists. The tour below is real, executed code (`example.js` — run it yourself with `pnpm example`):
+
+```js
+{{EXAMPLE}}
 ```
 
 ---
@@ -69,6 +75,9 @@ How does the magic work?
 
 1. **Deep Proxy**: We intercept all `get`, `set`, and `delete` operations on the object, tracking the exact path (e.g., `["user", "profile", "name"]`).
 2. **Schema-Driven Flat Structure**: In `FlatJSONStorage`, we maintain a schema to flatten nested JSON objects in the storage layer. When you modify `data.a.b.c`, only the `a.b.c` key is updated in the adapter. Say goodbye to the performance nightmare of saving the whole object!
+3. **Everything stored is a deep copy**: assigning an object snapshots it into the store, which then wraps its own private copy in lightweight proxies up front, so deep mutations need no `get` trap. Two consequences:
+   - **Your objects are never adopted**: the store never holds, mutates or aliases the object you passed. Mutating it afterwards (at any depth) has no effect on the store and is not persisted — write through `storage.data...` instead.
+   - **Shared identity inside the store**: assigning the same object reference to two keys keeps one stored value (`storage.data.a === storage.data.b`), and re-assigning that reference refreshes the stored copy.
 
 ---
 
@@ -97,10 +106,11 @@ Issues, PRs, and suggestions are super welcome! Let's make state persistence ele
 
 Repo layout:
 
-- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
-- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and committed — rebuild, don't hand-edit.
-- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `test.ts` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
-- `test.ts` is the only test file (plain `node:assert` + console runner, no test framework).
+- `storage.js` is the **source of truth**: hand-written JS with `//@ts-check` + JSDoc types. There is no `.ts` source; `tsconfig.json` type-checks the project (`storage.js` + `example.js` + `vitest.config.ts` + `test/**/*.test.ts`) via `checkJs`, `scripts/tsconfig.json` type-checks the tooling scripts, and `tsconfig.build.json` emits `storage.d.ts` from `storage.js` only.
+- `storage.d.ts` is **generated** by `tsc` (`emitDeclarationOnly`) and gitignored — don't commit or hand-edit it. It is rebuilt at publish time and shipped inside the package.
+- `README.md` is **generated** by `scripts/buildDocs.ts` from `README_template.md` + `example.js` + `storage.d.ts` — edit `README_template.md`, never `README.md`.
+- `example.js` is the runnable quick-start injected into the "Try it now" section — it's executed by `pnpm example` and type-checked by `tsc`, so the README examples can't drift from real behavior.
+- Tests live in `test/` and run under Vitest (`test/**/*.test.ts`); shared helpers are in `test/helpers.ts`.
 - `typedoc.json` builds the showcase site with **TypeDoc** (API docs from the `storage.js` JSDoc, this README as front page) — `buildDocs.ts` runs it via `pnpm site`, so `pnpm build` outputs `docs/dist` in one flow.
 
 ## 📚 Reference

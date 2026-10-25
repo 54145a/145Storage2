@@ -1,0 +1,66 @@
+name: Deploy docs & publish
+
+# 仅在 tag（发布）时运行：文档站与 npm 包始终对应同一版本，
+# 避免 main 上的未发布改动先上线文档。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-docs:
+    # 仅 tag：构建并部署 showcase 站点到 GitHub Pages。
+    # （workflow_dispatch 可选任意 ref，因此仍需条件守卫。）
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/dist
+      - uses: actions/deploy-pages@v5
+
+  publish:
+    # 仅 tag：发布到 npm。tag 不受分支保护门禁，
+    # 因此这里自带 test + build 作为发布前的安全网。
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: latest
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm publish --provenance --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

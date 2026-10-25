@@ -1,7 +1,7 @@
 //@ts-check
 /**
  * @author 145a
- * @license AGPL-3.0
+ * @license LGPL-3.0-or-later
  */
 
 //#region 
@@ -19,7 +19,39 @@ class ProxyCacheEntry {
 	}
 }
 /** @type {WeakMap<object, ProxyCacheEntry>} */
-const deepProxyCache = new WeakMap();
+const lightDeepProxyCache = new WeakMap();
+/** @type {WeakMap<object, ProxyCacheEntry>} */
+const fullDeepProxyCache = new WeakMap();
+/**
+ * Proxy → the `DeepProxyHandler` that owns it. Used to tell a value this store
+ * already owns (stored as-is, identity preserved) from one that belongs to a
+ * different store (which must be copied before it enters this one).
+ * @type {WeakMap<object, DeepProxyHandler>}
+ */
+const deepProxyOwners = new WeakMap();
+/**
+ * Proxy → the plain object behind it, so a re-assignment of the same source can
+ * refresh the stored copy in place instead of returning stale contents.
+ * @type {WeakMap<object, object>}
+ */
+const deepProxyTargets = new WeakMap();
+/**
+ * Handler → (source object → stored proxy). Memoizes the deep copy made for a
+ * given source reference, so assigning the same object to two keys keeps one
+ * stored value (`data.a === data.b`) rather than two divergent copies, while
+ * still never sharing the caller's object graph.
+ * @type {WeakMap<DeepProxyHandler, WeakMap<object, any>>}
+ */
+const storedCopyCache = new WeakMap();
+/** @type {WeakMap<object, Map<string, string[]>>} */
+const ownKeysCache = new WeakMap();
+/** @type {WeakMap<object, Map<string, {configurable: boolean, enumerable: boolean, writable: boolean, value: undefined} | null>>} */
+const gopdCache = new WeakMap();
+/** @param {object} instance */
+function clearEnumerationCaches(instance) {
+	ownKeysCache.delete(instance);
+	gopdCache.delete(instance);
+}
 
 /** 
  * @typedef {object} DeepProxyHandler 
@@ -32,7 +64,7 @@ const deepProxyCache = new WeakMap();
  */
 
 /** 
- * @see createDeepProxy 
+ * @see createFullDeepProxy 
  */
 class DeepProxyWrapExempt {
 	/** 
@@ -52,86 +84,211 @@ for (const key of Object.getOwnPropertyNames(Symbol)) {
 	try {
 		const val = /** @type {any} */ (Symbol)[key];
 		if (typeof val === "symbol") builtInSymbols.add(val);
-	} catch {}
+	} catch { }
 }
 for (const key of Object.getOwnPropertyNames(Symbol.prototype)) {
 	try {
 		const val = /** @type {any} */ (Symbol.prototype)[key];
 		if (typeof val === "symbol") builtInSymbols.add(val);
-	} catch {}
+	} catch { }
 }
 
 const assertSymbol = (/** @type {string|symbol} */ prop) => {
 	if (typeof prop === "symbol" && !builtInSymbols.has(prop)) {
 		console.assert(false,
 			`Symbol("${Symbol.keyFor(prop) || prop.description}") is not a built-in Symbol ` +
-			`and is not supported by createDeepProxy. ` +
+			`and is not supported by deep proxies. ` +
 			`JSON storage cannot serialize Symbol properties.`
 		);
 	}
 };
 /**
- * Creates a deep Proxy that reports every property access as a dot-separated key
- * (e.g. `"user.profile.name"`) to `handler`, nesting a proxy for each object.
- * Symbol properties are prohibited (except the 15 ECMAScript built-in Symbols
- * like `Symbol.iterator`, `Symbol.toPrimitive`, etc.). User-defined Symbols
- * trigger a `console.assert` notice and are silently ignored — they never
- * reach `handler`. This is by design: JSON storage cannot serialize Symbols.
+ * The lightweight deep proxy: only the traps a JSON cache actually needs
+ * (`set`, `deleteProperty`). No path tracking, no get trap, no pass-through
+ * `has` / `ownKeys` / `getOwnPropertyDescriptor` traps — those fall back to
+ * V8's native default path, keeping key enumeration and spread fast. Every
+ * reachable nested value must already be wrapped by `wrapStoredValue` (the
+ * store owns its object graph), so reads are pure native property access
+ * through the proxy boundary.
+ * Used by `JSONDebounceStorage`; for schema-driven virtual keys see
+ * {@link createFullDeepProxy}. Symbol handling is identical there: built-in
+ * Symbols pass through to `Reflect`, user-defined Symbols get a
+ * `console.assert` notice and never reach `handler` — a value JSON cannot
+ * serialize must not be reported as persisted.
+ * @param {object} target
+ * @param {DeepProxyHandler} handler
+ * @returns {*}
+ */
+function createLightDeepProxy(target, handler) {
+	const cacheEntry = lightDeepProxyCache.get(target);
+	if (cacheEntry && cacheEntry.handler === handler) {
+		return cacheEntry.proxy;
+	}
+	const proxy = new Proxy(target, {
+		set(obj, prop, value, receiver) {
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.set(obj, prop, value, receiver); }
+			if (handler.set) return handler.set(obj, prop, value, receiver);
+			return Reflect.set(obj, prop, value, receiver);
+		},
+		deleteProperty(obj, prop) {
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.deleteProperty(obj, prop); }
+			if (handler.deleteProperty) return handler.deleteProperty(obj, prop);
+			return Reflect.deleteProperty(obj, prop);
+		}
+	});
+	deepProxyOwners.set(proxy, handler);
+	deepProxyTargets.set(proxy, target);
+	lightDeepProxyCache.set(target, new ProxyCacheEntry(proxy, "", handler));
+	return proxy;
+}
+/**
+ * Deep-copies a JSON value. Everything the storages keep is a deep copy of what
+ * they were given, so a caller can keep mutating its own objects without
+ * affecting — or being affected by — the store. `JSON` is the persisted form
+ * of every value that passed `assertIsJSONStorageStorableValue`, so the
+ * round-trip is lossless.
+ * @param {*} value
+ * @returns {*}
+ */
+function deepCopyValue(value) {
+	if (value === null || typeof value !== "object") return value;
+	return JSON.parse(/** @type {string} */ (JSON.stringify(value)));
+}
+/**
+ * Deep-copies `value` into an object graph owned by `handler`: a fresh object
+ * whose nested slots are this store's light proxies. The caller's graph is
+ * never adopted or mutated — everything stored is a deep copy.
+ *
+ * Copies are memoized per handler by *source* reference, so assigning the same
+ * object to two keys keeps one stored value (`data.a === data.b`) instead of
+ * two divergent copies. Re-assigning a source refreshes its copy in place, so
+ * identity survives while new contents are picked up.
+ *
+ * A proxy is not a plain source: one this handler owns is returned as-is (it is
+ * already stored data), and a foreign one is snapshotted afresh — importing
+ * another store's value twice must not alias two keys of this store.
+ * @param {*} value
+ * @param {DeepProxyHandler} handler
+ * @returns {*}
+ */
+function wrapStoredValue(value, handler) {
+	if (value === null || typeof value !== "object" || !(Array.isArray(value) || isPlainObject(value))) return value;
+	const owner = deepProxyOwners.get(value);
+	if (owner !== undefined) {
+		return owner === handler ? value : copyStoredValue(value, handler);
+	}
+	let perHandler = storedCopyCache.get(handler);
+	if (!perHandler) { perHandler = new WeakMap(); storedCopyCache.set(handler, perHandler); }
+	const cached = perHandler.get(value);
+	if (cached !== undefined) {
+		refreshStoredCopy(cached, value, handler);
+		return cached;
+	}
+	const proxy = copyStoredValue(value, handler);
+	perHandler.set(value, proxy);
+	return proxy;
+}
+/**
+ * Builds the stored copy for `value` and wraps it (and its children) in light
+ * proxies owned by `handler`. The source is only read, never written.
+ * @param {*} value
+ * @param {DeepProxyHandler} handler
+ * @returns {*}
+ */
+function copyStoredValue(value, handler) {
+	/** @type {any} */
+	const copy = Array.isArray(value) ? [] : {};
+	const proxy = createLightDeepProxy(copy, handler);
+	if (Array.isArray(value)) {
+		for (let i = 0; i < value.length; i++) copy[i] = wrapStoredValue(value[i], handler);
+	} else {
+		const source = /** @type {Record<string, any>} */ (value);
+		for (const key of Object.keys(source)) copy[key] = wrapStoredValue(source[key], handler);
+	}
+	return proxy;
+}
+/**
+ * Re-syncs an already stored copy with its source (same reference re-assigned
+ * after mutation), writing straight to the proxy target so no flush is
+ * scheduled by the refresh itself.
+ * @param {*} proxy
+ * @param {*} source
+ * @param {DeepProxyHandler} handler
+ */
+function refreshStoredCopy(proxy, source, handler) {
+	const target = /** @type {any} */ (deepProxyTargets.get(/** @type {object} */ (proxy)));
+	if (!target) return;
+	if (Array.isArray(source)) {
+		target.length = source.length;
+		for (let i = 0; i < source.length; i++) target[i] = wrapStoredValue(source[i], handler);
+		return;
+	}
+	const src = /** @type {Record<string, any>} */ (source);
+	for (const key of Object.keys(target)) {
+		if (!Object.hasOwn(src, key)) delete target[key];
+	}
+	for (const key of Object.keys(src)) target[key] = wrapStoredValue(src[key], handler);
+}
+/**
+ * The full-featured deep proxy: reports every property access as a
+ * dot-separated key (e.g. `"user.profile.name"`) to `handler` and implements
+ * every trap (`has` / `ownKeys` / `getOwnPropertyDescriptor` included) so
+ * schema-driven virtual keys work — this is what `FlatJSONStorage` runs on.
+ * For the minimal fast path used by `JSONDebounceStorage` see
+ * {@link createLightDeepProxy}. Symbol properties are prohibited (except the
+ * 15 ECMAScript built-in Symbols like `Symbol.iterator`, `Symbol.toPrimitive`,
+ * etc.). User-defined Symbols trigger a `console.assert` notice and are
+ * silently ignored — they never reach `handler`. This is by design: JSON
+ * storage cannot serialize Symbols.
  * @param {object} target
  * @param {DeepProxyHandler} handler
  * @param {string} [currentKey=""]
  * @returns {*}
  */
-function createDeepProxy(target, handler, currentKey = "") {
-	const cacheEntry = deepProxyCache.get(target);
+function createFullDeepProxy(target, handler, currentKey = "") {
+	const cacheEntry = fullDeepProxyCache.get(target);
 	if (cacheEntry) {
 		if (cacheEntry.handler === handler && cacheEntry.firstKey === currentKey) {
 			return cacheEntry.proxy;
 		}
 		console.warn(
-			"[createDeepProxy] Same object with different context. Overwriting cache.",
+			"[createFullDeepProxy] Same object with different context. Overwriting cache.",
 			"Old handler/key:", cacheEntry.handler, cacheEntry.firstKey,
 			"New handler/key:", handler, currentKey
 		);
 	}
 	const proxy = new Proxy(target, {
 		has(target, prop) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
-			if (handler.has) return handler.has(target, key);
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.has(target, prop); }
+			if (handler.has) return handler.has(target, currentKey === "" ? prop : currentKey + "." + prop);
 			return Reflect.has(target, prop);
 		},
 		get(obj, prop, receiver) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.get(obj, prop, receiver); }
+			const key = currentKey === "" ? prop : currentKey + "." + prop;
 			if (handler.get) {
 				const result = handler.get(obj, key, receiver);
 				if (result instanceof DeepProxyWrapExempt) return result.value;
 				if (typeof result === "object" && result !== null && typeof result !== "function") {
-					return createDeepProxy(result, handler, key);
+					return createFullDeepProxy(result, handler, key);
 				}
 				return result;
 			}
 			const value = Reflect.get(obj, prop, receiver);
 			if (typeof value === "object" && value !== null && typeof value !== "function") {
-				return createDeepProxy(value, handler, key);
+				return createFullDeepProxy(value, handler, key);
 			}
 			return value;
 		},
 		set(obj, prop, value, receiver) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.set(obj, prop, value, receiver); }
+			const key = currentKey === "" ? prop : currentKey + "." + prop;
 			if (handler.set) return handler.set(obj, key, value, receiver);
 			return Reflect.set(obj, prop, value, receiver);
 		},
 		deleteProperty(obj, prop) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
-			if (handler.deleteProperty) return handler.deleteProperty(obj, key);
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.deleteProperty(obj, prop); }
+			if (handler.deleteProperty) return handler.deleteProperty(obj, currentKey === "" ? prop : currentKey + "." + prop);
 			return Reflect.deleteProperty(obj, prop);
 		},
 		ownKeys(target) {
@@ -139,14 +296,17 @@ function createDeepProxy(target, handler, currentKey = "") {
 			return Reflect.ownKeys(target);
 		},
 		getOwnPropertyDescriptor(target, prop) {
-			assertSymbol(prop);
-			const strProp = String(prop);
-			const key = currentKey === "" ? strProp : `${currentKey}.${strProp}`;
-			if (handler.getOwnPropertyDescriptor) return handler.getOwnPropertyDescriptor(target, key, prop);
+			if (typeof prop === "symbol") { assertSymbol(prop); return Reflect.getOwnPropertyDescriptor(target, prop); }
+			if (handler.getOwnPropertyDescriptor) return handler.getOwnPropertyDescriptor(target, currentKey === "" ? prop : currentKey + "." + prop, prop);
 			return Reflect.getOwnPropertyDescriptor(target, prop);
 		}
 	});
-	deepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
+	fullDeepProxyCache.set(target, new ProxyCacheEntry(proxy, currentKey, handler));
+	// Register ownership so a full proxy assigned into a whole-document store
+	// (e.g. `item.data.copy = flat.data.cfg`) is copied, not adopted — otherwise
+	// writes through it would dispatch to the *flat* backend.
+	deepProxyOwners.set(proxy, handler);
+	deepProxyTargets.set(proxy, target);
 	return proxy;
 }
 
@@ -207,11 +367,13 @@ class DebounceStorage extends StorageInterface {
 	 * @param {Exclude<any, undefined>} initialValue 
 	 * @param {(value: any)=>Promise<void>|void} updator 
 	 * @param {number} updateDelayMs 
-	 * @param {boolean} structuredCloneExempt Use raw initialValue as cache. DO NOT MODIFY THE OBJECT EVER IF YOU ENABLE THIS.
 	 */
-	constructor(initialValue, updator, updateDelayMs = 100, structuredCloneExempt = false) {
+	constructor(initialValue, updator, updateDelayMs = 100) {
 		super();
-		this._cache = structuredCloneExempt ? initialValue : structuredClone(initialValue);
+		// Everything the storage holds is a deep copy of what it was given: the
+		// caller's object graph is never adopted, so later mutations of it cannot
+		// leak into the store (and vice versa).
+		this._cache = deepCopyValue(initialValue);
 		this.updator = updator;
 		this.updateDelayMs = updateDelayMs;
 	}
@@ -314,31 +476,93 @@ function assertIsFlatJSONStorageStorableArray(array, ...info) {
 		throw new TypeError("Non-primitive array.");
 	}
 }
+/**
+ * @extends {DebounceStorage}
+ */
 class JSONDebounceStorage extends DebounceStorage {
 	/** 
 	 * @param {object} initialValue
 	 * @param {(value: Object)=>Promise<void>|void} updator
-	 * @param {{updateDelayMs?: number, structuredCloneExempt?: boolean,	onSet?: (value: Object, key: string)=>void}} options
+	 * @param {{updateDelayMs?: number, onSet?: (value: Object, key: string)=>void}} options
+	 * `onSet` is called with the assigned value and the leaf property name
+	 * (e.g. `"theme"`), NOT a dotted path (e.g. `"user.profile.theme"`).
+	 * It fires only when the value actually changes — identical-value
+	 * assignments are short-circuited before reaching `onSet`.
+	 *
+	 * Everything stored is a **deep copy**: assigning an object snapshots it, so
+	 * the caller's object graph is never adopted, mutated, or aliased. Mutating
+	 * the object after assigning it does not affect the store (and is not
+	 * persisted); write through `data` instead. The same reference assigned to
+	 * two keys keeps one stored value (`data.a === data.b`), because the copy is
+	 * memoized per source reference.
 	 */
-	constructor(initialValue, updator, { updateDelayMs, structuredCloneExempt, onSet = () => { } } = {}) {
-		super(initialValue, updator, updateDelayMs, structuredCloneExempt);
-		this._data = createDeepProxy(this._cache, {
-			set: (target, key, value, receiver) => {
+	constructor(initialValue, updator, { updateDelayMs, onSet = () => { } } = {}) {
+		super(initialValue, updator, updateDelayMs);
+		// --- Eager wrapping (always active) ---
+		// Every reachable nested JSON object/array in the cache is replaced
+		// with a light proxy. The data proxy therefore needs no `get` trap:
+		// reads are pure native property access through the proxy boundary.
+		// The cache itself is already a private deep copy (DebounceStorage),
+		// so wrapping it never touches the caller's objects.
+		/**
+		 * The cache is already a private deep copy, so every value it holds is
+		 * this store's own data. `wrapStoredValue` copies what is assigned and
+		 * wraps the copies, keeping reads trap-free without ever adopting the
+		 * caller's graph.
+		 * @param {*} value
+		 */
+		const wrapForCache = (value) => wrapStoredValue(value, handler);
+		const handler = {
+			/**
+			 * @param {object} target
+			 * @param {string} prop
+			 * @param {*} value
+			 * @param {object|undefined} receiver
+			 */
+			set: (target, prop, value, receiver) => {
+				// Identical-value writes are no-ops. Arrays are excluded: an array
+				// replacement is replayed onto the debouncer's own array with
+				// `splice()`, where every index/length write is `Object.is`-equal
+				// and would otherwise skip `requestUpdate()` and never persist.
+				if (!Array.isArray(target) && Object.hasOwn(target, prop) && Object.is(/** @type {Record<string, any>} */ (target)[prop], value)) return true;
 				assertIsJSONStorageStorableValue(value);
-				onSet(value, key);
+				onSet(value, prop);
 				this.requestUpdate();
-				const prop = key.slice(key.lastIndexOf(".") + 1);
-				return Reflect.set(target, prop, value, Array.isArray(target) ? target : receiver);
+				return Reflect.set(target, prop, wrapForCache(value), Array.isArray(target) ? target : receiver);
 			},
-			deleteProperty: (target, key) => {
+			/**
+			 * @param {object} target
+			 * @param {string} prop
+			 */
+			deleteProperty: (target, prop) => {
 				this.requestUpdate();
-				const prop = key.slice(key.lastIndexOf(".") + 1);
 				return Reflect.deleteProperty(target, prop);
 			}
-		});
+		};
+		this._data = createLightDeepProxy(this._cache, handler);
+		JSONDebounceStorage._eagerWrap(this._cache, handler);
 		this.init();
 	}
-	/** @type {ReturnType<typeof createDeepProxy>} */
+	/**
+	 * Recursively replace every nested JSON object/array in `obj` with its
+	 * light proxy, so that all values reachable from the cache are already
+	 * wrapped and reads need no `get` trap. Values that are already this
+	 * handler's proxies are kept as-is (identity reuse).
+	 * @param {Record<string, any>} obj
+	 * @param {DeepProxyHandler} handler
+	 */
+	static _eagerWrap(obj, handler) {
+		for (const key of Object.keys(obj)) {
+			const val = obj[key];
+			if (val === null || typeof val !== "object" || !(Array.isArray(val) || isPlainObject(val))) continue;
+			if (deepProxyOwners.get(val) === handler) continue;
+			// In place: `obj` belongs to this store (its cache is a private deep
+			// copy), so wrapping it does not touch any caller object.
+			obj[key] = createLightDeepProxy(val, handler);
+			JSONDebounceStorage._eagerWrap(val, handler);
+		}
+	}
+	/** @type {ReturnType<typeof createLightDeepProxy>} */
 	_data;
 }
 
@@ -430,9 +654,6 @@ class FlatJSONStorage extends StorageInterface {
 		/** @type {Map<string, string[]>} */
 		this._splitCache = new Map();
 
-		/** @type {Map<string, Function>} */
-		this._accessorCache = new Map();
-
 		/** @type {Map<string, JSONDebounceStorage>} */
 		this.arrayDebouncers = new Map();
 
@@ -482,7 +703,17 @@ class FlatJSONStorage extends StorageInterface {
 				return this.cache.get(key);
 			},
 			set: (target, key, value) => {
-				assertIsJSONStorageStorableValue(value, "flat key:", key);
+				// Fast path: same value, skip validation, schema management, and adapter write
+				const cached = this.cache.get(key);
+				if (cached !== undefined && Object.is(cached, value)) return true;
+
+				// Fast path: inline validation for primitives (avoids function call chain)
+				const t = typeof value;
+				if (t === "string" || t === "boolean" || value === null || (t === "number" && isFinite(value))) {
+					// Valid primitive — proceed
+				} else {
+					assertIsJSONStorageStorableValue(value, "flat key:", key);
+				}
 
 				const oldSchemaNode = this._getSchemaNode(key);
 				const oldNodeType = getSchemaNodeValueType(oldSchemaNode);
@@ -527,6 +758,7 @@ class FlatJSONStorage extends StorageInterface {
 						console.error(e);
 					}
 				}
+				clearEnumerationCaches(this);
 				return true;
 			},
 			deleteProperty: (target, key) => {
@@ -543,25 +775,36 @@ class FlatJSONStorage extends StorageInterface {
 					console.error(e);
 				}
 				this._deleteSchemaNode(key);
+				clearEnumerationCaches(this);
 				return true;
 			},
 			ownKeys: (target, key) => {
-				const schemaNode = this._getSchemaNode(key);
-				if (schemaNode && typeof schemaNode === "object") {
-					return Object.keys(schemaNode);
+				let cache = ownKeysCache.get(this);
+				if (cache) {
+					const keys = cache.get(key);
+					if (keys !== undefined) return keys;
 				}
-				return [];
+				const schemaNode = this._getSchemaNode(key);
+				const keys = (schemaNode && typeof schemaNode === "object") ? Object.keys(schemaNode) : [];
+				if (!cache) { cache = new Map(); ownKeysCache.set(this, cache); }
+				cache.set(key, keys);
+				return keys;
 			},
 			getOwnPropertyDescriptor: (target, key, prop) => {
-				const schemaNode = this._getSchemaNode(key);
-				if (schemaNode !== undefined) {
-					return { configurable: true, enumerable: true, writable: true, value: undefined };
+				let cache = gopdCache.get(this);
+				if (cache) {
+					const desc = cache.get(key);
+					if (desc !== undefined) return desc === null ? undefined : desc;
 				}
-				return undefined;
+				const schemaNode = this._getSchemaNode(key);
+				const desc = schemaNode !== undefined ? { configurable: true, enumerable: true, writable: true, value: undefined } : null;
+				if (!cache) { cache = new Map(); gopdCache.set(this, cache); }
+				cache.set(key, desc);
+				return desc === null ? undefined : desc;
 			}
 		}
 
-		this._data = createDeepProxy({}, this._handler);
+		this._data = createFullDeepProxy({}, this._handler);
 	}
 
 	/** @override */
@@ -571,10 +814,10 @@ class FlatJSONStorage extends StorageInterface {
 
 		this.schemaStorage = new JSONDebounceStorage(
 			initialSchema,
-			async (val) => { await this.adapter.set(FLAT_SCHEMA_KEY, val); },
-			{ structuredCloneExempt: true }
+			async (val) => { await this.adapter.set(FLAT_SCHEMA_KEY, val); }
 		);
 		this.schema = this.schemaStorage.data;
+		clearEnumerationCaches(this);
 
 		this.isReady = true;
 	}
@@ -606,6 +849,7 @@ class FlatJSONStorage extends StorageInterface {
 			}
 		}
 		await Promise.all(deletePromises);
+		clearEnumerationCaches(this);
 	}
 
 	/**
@@ -654,27 +898,26 @@ class FlatJSONStorage extends StorageInterface {
 		}
 		delete node[parts[parts.length - 1]];
 	}
-	/** @param {string} key */
+	/**
+	 * Resolves a dotted key to its schema node, or `undefined` when any part of
+	 * the path is missing. Shares `_splitCache` with the write path. The
+	 * compiled accessor this replaces was no faster per lookup, cost ~1.8µs of
+	 * synchronous compilation for each never-seen key, needed an extra Map per
+	 * instance to hold the compiled functions, and threw instead of reporting
+	 * "no such key" when an intermediate segment was missing.
+	 * @param {string} key
+	 */
 	_getSchemaNode(key) {
 		if (key === "") return this.schema;
-		let fn = this._accessorCache.get(key);
-		if (!fn) {
-			const parts = key.split(".");
-			try {
-				fn = new Function("obj", "return obj" + parts.map(p => `[${JSON.stringify(p)}]`).join(""));
-			} catch {
-				fn = (/** @type {any} */ obj) => {
-					let node = obj;
-					for (const p of parts) {
-						if (node && typeof node === "object") node = node[p];
-						else return undefined;
-					}
-					return node;
-				};
-			}
-			this._accessorCache.set(key, fn);
+		let parts = this._splitCache.get(key);
+		if (!parts) { parts = key.split("."); this._splitCache.set(key, parts); }
+		/** @type {any} */
+		let node = this.schema;
+		for (let i = 0; i < parts.length; i++) {
+			if (node === null || typeof node !== "object") return undefined;
+			node = node[parts[i]];
 		}
-		return fn(this.schema);
+		return node;
 	}
 	/**
 	 * @param {string} key
@@ -697,7 +940,11 @@ class FlatJSONStorage extends StorageInterface {
 	_getArrayDebouncer(key, initialArr) {
 		let debouncer = this.arrayDebouncers.get(key);
 		if (!debouncer) {
-			let arrTarget = initialArr || this.cache.get(key);
+			// The debouncer deep-copies its initial value, so a proxied
+			// array (e.g. another key's data, assigned like
+			// `flat.data.b = flat.data.a`) gives this key an isolated
+			// array instead of sharing the other key's cache.
+			const arrTarget = initialArr || this.cache.get(key);
 			if (!Array.isArray(arrTarget)) {
 				throw new TypeError(
 					`[FlatJSONStorage] Expected an array but got ${typeof arrTarget} at "${key}". Schema and cache are out of sync.`
@@ -710,7 +957,6 @@ class FlatJSONStorage extends StorageInterface {
 					await this.adapter.set(key, newVal);
 				},
 				{
-					structuredCloneExempt: true,
 					onSet: (value, path) => {
 						assertIsFlatJSONStorageStorableArray([value], "in debounce array at key:", key, "path:", path);
 					}
@@ -755,10 +1001,13 @@ class FlatJSONStorage extends StorageInterface {
 		 * @param {any} value
 		 */
 		const handleGetHandlerResult = (flatKey, value) => {
-			this.cache.set(flatKey, value);
+			// Adapter stores { value, type } wrappers — unwrap to the raw value
+			// so the cache format is consistent with the write path.
+			const unwrapped = value != null && typeof value === "object" && "value" in value && "type" in value ? value.value : value;
+			this.cache.set(flatKey, unwrapped);
 			const flatNode = this._getSchemaNode(flatKey);
 			if (getSchemaNodeValueType(flatNode) === FlatSchemaValueType.DEBOUNCE_ARRAY) {
-				this._getArrayDebouncer(flatKey, value);
+				this._getArrayDebouncer(flatKey, unwrapped);
 			}
 		};
 		for (const flatKey of subKeys) {
@@ -823,10 +1072,14 @@ class FlatJSONStorage extends StorageInterface {
 		} else {
 			this._deleteSchemaNode(key);
 		}
+		clearEnumerationCaches(this);
 	}
 }
 //#endregion
 //#region
+/**
+ * @extends {JSONDebounceStorage}
+ */
 class WebStorageItemStorage extends JSONDebounceStorage {
 	/** 
 	 * @param {string} itemName 
